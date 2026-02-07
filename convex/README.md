@@ -1,0 +1,55 @@
+# Convex - Reconciliación de Pagos
+
+Funciones Convex para almacenar y consultar pagos de CloudWatch.
+
+## Schema: paymentRecords
+
+| Campo | Tipo | Descripción |
+|-------|------|-------------|
+| referencia | string | Referencia única del pago |
+| monto | number | Monto en pesos |
+| timestamp | string | Timestamp CloudWatch (UTC) |
+| fechaTransaccion | string | Fecha transacción |
+| logSource | v1, v2, payment | Fuente del log |
+| movimiento | string | Tipo de trámite (DENOM, Refrendo, etc.) |
+| estatus | string | Estatus (PAGADO, PAGO VALIDADO, etc.) |
+| tramiteId | number (opc.) | ID trámite |
+| importMonth | string | YYYY-MM |
+| importDate | string (opc.) | YYYY-MM-DD en hora México (UTC-6) |
+
+## Schema: monthStats (dayEntries / dailyBreakdown)
+
+Cada entrada de día incluye conteos y montos por fuente:
+
+| Campo | Tipo | Descripción |
+|-------|------|-------------|
+| v1, v2, payment | number | Conteo de transacciones por fuente |
+| v1Monto, v2Monto, paymentMonto | number (opc.) | Monto total por fuente (V1, V2, EVO) |
+
+Usados por `getPaymentChannelStats` para desglose EVO vs Ventanilla por día.
+
+## Funciones
+
+### Actions
+
+- **fetchAndIngestForDate** (date: string) – Consulta CloudWatch para el día (hora México), deduplica (payment > v2 > v1) e inserta en Convex. Borra datos previos de esa fecha antes de insertar.
+
+### Mutations
+
+- **ingestPaymentBatch** – Inserta lote de registros (omite si referencia ya existe).
+- **deletePaymentsByMonth** – Borra todos los registros de un mes (YYYY-MM).
+- **deletePaymentsByDate** – Borra registros con importDate = date.
+- **deletePaymentsByReferencias** – Borra registros con las referencias indicadas (para limpiar datos con importDate incorrecto antes de re-sync).
+
+### Queries
+
+- **getDayComparison** – Comparación por fuente para una fecha: conteo, monto total, por movimiento.
+- **getMonthSummary** – Resumen mensual.
+- **getPaymentsByMonthPaginated** – Paginada para mes (evita límite 8192). Filtro opcional por fuente.
+- **getPaymentsBySource**, **searchByReferencia**, **getMonthKPIs**, **getDailyBreakdown**, etc.
+- **getPaymentChannelStats** (januaryQueries) – Estadísticas EVO vs Ventanilla (v1+v2) por día, usando `v1Monto`, `v2Monto`, `paymentMonto` de monthStats. Si no hay montos por fuente, estima proporcionalmente.
+
+## Utilidades
+
+- `convex/lib/mexicoDate.ts` – timestampToMexicoDate, timestampToMexicoMonth (UTC a fecha México UTC-6).
+- `convex/lib/parsers.ts` – parseV1V2, parsePayment para logs CloudWatch.
