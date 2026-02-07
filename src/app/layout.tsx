@@ -16,8 +16,15 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Dashboard de Reconciliación de Pagos",
-  description: "Análisis de pagos procesados via AWS Step Functions",
+  title: "PdP-DGO-Dashboard-Financiero",
+  description:
+    "Dashboard financiero de reconciliación de pagos - Presidencia de Pagos DGO",
+  manifest: "/manifest.webmanifest",
+  icons: {
+    icon: "/icon.svg",
+    apple: "/icon.svg",
+  },
+  applicationName: "PdP-DGO-Dashboard-Financiero",
 };
 
 export default function RootLayout({

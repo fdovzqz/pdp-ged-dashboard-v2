@@ -1,5 +1,6 @@
 "use client";
 
+import Image from "next/image";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { CalendarDays, Upload } from "lucide-react";
@@ -16,7 +17,28 @@ export const Nav = (): React.ReactElement => {
   return (
     <nav className="border-b border-slate-700/50 bg-slate-900/50 backdrop-blur-sm sticky top-0 z-50">
       <div className="max-w-7xl mx-auto px-6 py-3">
-        <div className="flex items-center gap-4">
+        <div className="flex items-center gap-6">
+          {/* App branding */}
+          <Link href="/" className="flex items-center gap-2.5 shrink-0">
+            <Image
+              src="/icon.svg"
+              alt="PdP-DGO Logo"
+              width={28}
+              height={28}
+              className="rounded-md"
+            />
+            <span className="text-sm font-semibold tracking-tight text-slate-100">
+              PdP-DGO
+              <span className="hidden sm:inline text-emerald-400/80 font-normal ml-1">
+                Dashboard Financiero
+              </span>
+            </span>
+          </Link>
+
+          {/* Separator */}
+          <div className="h-5 w-px bg-slate-700/60" />
+
+          {/* Nav items */}
           {NAV_ITEMS.map((item) => {
             const active = pathname === item.href;
             const Icon = item.icon;
