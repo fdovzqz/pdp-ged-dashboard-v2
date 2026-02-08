@@ -4,7 +4,7 @@ import { useMemo, useState, useCallback, useRef, memo } from "react";
 import { motion } from "framer-motion";
 import { Loader2 } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { ANALYSIS_YEAR } from "@/lib/constants";
+import { getMonthShortName } from "@/lib/constants";
 
 export interface HeatmapCell {
   day: number;
@@ -17,12 +17,15 @@ export interface HeatmapCell {
 
 const DAY_LETTERS = ["D", "L", "M", "M", "J", "V", "S"] as const;
 
-function buildCalendarGrid(data: HeatmapCell[]): (HeatmapCell | null)[][] {
+function buildCalendarGrid(
+  data: HeatmapCell[],
+  year: number,
+  month: number
+): (HeatmapCell | null)[][] {
   const byDay = new Map(data.map((d) => [d.day, d]));
-  const year = ANALYSIS_YEAR;
-  const month = 0; // Enero en Date (0-indexed)
-  const firstDay = new Date(year, month, 1).getDay();
-  const daysInMonth = new Date(year, month + 1, 0).getDate();
+  const month0 = month - 1; // 0-indexed para Date
+  const firstDay = new Date(year, month0, 1).getDay();
+  const daysInMonth = new Date(year, month, 0).getDate();
   const grid: (HeatmapCell | null)[][] = [];
   let row: (HeatmapCell | null)[] = Array(7).fill(null);
   for (let i = 0; i < firstDay; i++) row[i] = null;
@@ -30,7 +33,7 @@ function buildCalendarGrid(data: HeatmapCell[]): (HeatmapCell | null)[][] {
     const col = (firstDay + d - 1) % 7;
     row[col] = byDay.get(d) ?? {
       day: d,
-      dayName: ["Dom", "Lun", "Mar", "Mié", "Jue", "Vie", "Sáb"][new Date(year, month, d).getDay()],
+      dayName: ["Dom", "Lun", "Mar", "Mié", "Jue", "Vie", "Sáb"][new Date(year, month0, d).getDay()],
       week: Math.ceil(d / 7),
       value: 0,
       amount: 0,
@@ -51,6 +54,8 @@ export interface HeatmapChartProps {
   onDayClick: (day: number, year: number) => void;
   mode?: "events" | "amount";
   onModeChange?: (mode: "events" | "amount") => void;
+  month: number;
+  year: number;
 }
 
 interface TooltipState {
@@ -97,6 +102,8 @@ export const HeatmapChart = memo(({
   onDayClick,
   mode: controlledMode,
   onModeChange,
+  month,
+  year,
 }: HeatmapChartProps): React.ReactElement => {
   const [internalMode, setInternalMode] = useState<"events" | "amount">("events");
   const mode = controlledMode ?? internalMode;
@@ -112,7 +119,10 @@ export const HeatmapChart = memo(({
     );
   }, [data, mode]);
 
-  const grid = useMemo(() => (data ? buildCalendarGrid(data) : []), [data]);
+  const grid = useMemo(
+    () => (data ? buildCalendarGrid(data, year, month) : []),
+    [data, year, month]
+  );
 
   const stats = useMemo(() => {
     if (!data || data.length === 0) return { min: 0, max: 0, avg: 0 };
@@ -134,7 +144,7 @@ export const HeatmapChart = memo(({
       if (!container) return;
 
       let x = rect.left - container.left + rect.width / 2;
-      let y = rect.top - container.top - 8;
+      const y = rect.top - container.top - 8;
 
       // Keep tooltip in bounds
       if (x < 80) x = 80;
@@ -181,7 +191,9 @@ export const HeatmapChart = memo(({
       ref={containerRef}
     >
       <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
-        <h3 className="text-lg font-semibold font-display">Calendario Enero</h3>
+        <h3 className="text-lg font-semibold font-display">
+          Calendario {getMonthShortName(month)}
+        </h3>
         {hasAmountData && (
           <div className="flex gap-1">
             {(["events", "amount"] as const).map((m) => (
@@ -257,7 +269,7 @@ export const HeatmapChart = memo(({
           >
             <div className="rounded-lg border border-slate-700/50 bg-slate-900/95 backdrop-blur-sm px-3 py-2 shadow-xl text-center">
               <p className="text-xs font-medium text-slate-300">
-                {tooltip.dayName} {tooltip.day} Ene
+                {tooltip.dayName} {tooltip.day} {getMonthShortName(month)}
               </p>
               <p className="text-sm font-bold tabular-nums text-white">
                 {formatNumber(tooltip.value)} pagos

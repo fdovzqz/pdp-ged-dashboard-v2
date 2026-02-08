@@ -3,6 +3,7 @@
 import { useState, useMemo, memo } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { X, ChevronRight, DollarSign } from "lucide-react";
+import { MONTH_NAMES } from "@/lib/constants";
 import {
   BarChart,
   Bar,
@@ -53,7 +54,7 @@ export const DayDetailModal = memo(({
 }: DayDetailModalProps): React.ReactElement => {
   const [showHourly, setShowHourly] = useState(false);
 
-  const monthLabel = month === 1 ? "Enero" : `Mes ${month}`;
+  const monthLabel = MONTH_NAMES[month] ?? `Mes ${month}`;
 
   const ticketDiff = useMemo(() => {
     if (!dayFinancial || monthTicketPromedio <= 0) return null;

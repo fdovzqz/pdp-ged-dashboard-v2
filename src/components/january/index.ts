@@ -2,6 +2,7 @@ export { KPICard, kpiGridVariants } from "./KPICard";
 export { YearBadge } from "./YearBadge";
 export { CustomTooltip } from "./CustomTooltip";
 export { ContextHeader } from "./ContextHeader";
+export { MonthYearSelector } from "./MonthYearSelector";
 export { HistoricalChart } from "./HistoricalChart";
 export { HourlyChart } from "./HourlyChart";
 export { HeatmapChart } from "./HeatmapChart";

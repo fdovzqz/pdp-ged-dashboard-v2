@@ -23,11 +23,12 @@ const COLOR_PAGOS = "#34d399";
 const COLOR_MONTO = "#f59e0b";
 
 export interface HistoricalChartProps {
-  data: Array<{ day: number; "2026": number }> | undefined;
+  data: Array<Record<string, number>> | undefined;
   dailyAmountData?: Array<{ day: number; totalAmount: number }>;
   dailyAverage: number;
   dailyAverageAmount?: number;
   onDaySelect?: (day: number) => void;
+  yearKey?: string;
 }
 
 export const HistoricalChart = memo(({
@@ -36,6 +37,7 @@ export const HistoricalChart = memo(({
   dailyAverage,
   dailyAverageAmount,
   onDaySelect,
+  yearKey = "2026",
 }: HistoricalChartProps): React.ReactElement => {
   const [mode, setMode] = useState<"daily" | "cumulative">("daily");
 
@@ -46,7 +48,7 @@ export const HistoricalChart = memo(({
     );
     const mapped = data.map((row) => ({
       day: row.day,
-      value: row["2026"] ?? 0,
+      value: row[yearKey] ?? 0,
       dailyAmount: amountByDay.get(row.day) ?? 0,
     }));
     if (mode === "daily") return mapped;
@@ -57,7 +59,7 @@ export const HistoricalChart = memo(({
       accAmount += row.dailyAmount;
       return { day: row.day, value: accEvents, dailyAmount: accAmount };
     });
-  }, [data, dailyAmountData, mode]);
+  }, [data, dailyAmountData, mode, yearKey]);
 
   if (data === undefined) {
     return (

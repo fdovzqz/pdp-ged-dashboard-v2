@@ -7,7 +7,7 @@ import { CalendarDays, Upload } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 const NAV_ITEMS = [
-  { href: "/", label: "Análisis Enero", icon: CalendarDays },
+  { href: "/", label: "Análisis Mensual", icon: CalendarDays },
   { href: "/upload", label: "Datos", icon: Upload },
 ];
 

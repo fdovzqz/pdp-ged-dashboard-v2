@@ -56,7 +56,9 @@ export const HourlyChart = memo(({
 }: HourlyChartProps): React.ReactElement => {
   const [remainingSeconds, setRemainingSeconds] = useState<number | null>(null);
 
+  // Countdown timer resets when selection changes; setState in effect is intentional
   useEffect(() => {
+    /* eslint-disable react-hooks/set-state-in-effect -- Countdown timer must reset when selection changes */
     if (!selectedDayData) {
       setRemainingSeconds(null);
       return;
@@ -73,6 +75,7 @@ export const HourlyChart = memo(({
       });
     }, 1000);
     return () => clearInterval(interval);
+    /* eslint-enable react-hooks/set-state-in-effect */
   }, [selectedDayData, onClearSelection]);
 
   const showDayBars = selectedDayData && selectedDayData.hourly.length > 0;

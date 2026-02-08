@@ -19,18 +19,22 @@ export interface InsightsSectionProps {
   total: number;
   dailyAvg: number;
   lastDay: number;
-  historicalData?: Array<{ day: number; "2026": number }>;
+  historicalData?: Array<Record<string, number>>;
   topMovements?: Array<{ movimiento: string; totalAmount: number; count: number }>;
   totalAmount?: number;
+  yearKey?: string;
+  monthLabel?: string;
 }
 
 export const InsightsSection = memo(({
-  total,
+  total, // Passed by parent for consistency; reserved for future insights
   dailyAvg,
   lastDay,
   historicalData,
   topMovements,
   totalAmount,
+  yearKey = "2026",
+  monthLabel = "enero 2026",
 }: InsightsSectionProps): React.ReactElement => {
   const getDescription = useGetMovementDescription();
   const insights = useMemo(() => {
@@ -45,10 +49,10 @@ export const InsightsSection = memo(({
     if (historicalData && historicalData.length > 0) {
       const first7 = historicalData
         .filter((d) => d.day <= 7)
-        .reduce((s, d) => s + (d["2026"] ?? 0), 0);
+        .reduce((s, d) => s + ((d as Record<string, number>)[yearKey] ?? 0), 0);
       const last7 = historicalData
         .filter((d) => d.day >= lastDay - 6)
-        .reduce((s, d) => s + (d["2026"] ?? 0), 0);
+        .reduce((s, d) => s + ((d as Record<string, number>)[yearKey] ?? 0), 0);
 
       if (first7 > 0) {
         const growthTrend = (((last7 - first7) / first7) * 100).toFixed(0);
@@ -66,7 +70,7 @@ export const InsightsSection = memo(({
     // 2. Promedio diario
     if (historicalData && historicalData.length > 0 && dailyAvg > 0) {
       const daysAboveAvg = historicalData.filter(
-        (d) => (d["2026"] ?? 0) > dailyAvg
+        (d) => ((d as Record<string, number>)[yearKey] ?? 0) > dailyAvg
       ).length;
       result.push({
         icon: TrendingUp,
@@ -78,7 +82,7 @@ export const InsightsSection = memo(({
       result.push({
         icon: TrendingUp,
         title: "Promedio Diario",
-        text: `Promedio de ${formatNumber(dailyAvg)} pagos/día en enero 2026.`,
+        text: `Promedio de ${formatNumber(dailyAvg)} pagos/día en ${monthLabel}.`,
         accentClass: "border-violet-500/30 bg-violet-500/5",
       });
     }
@@ -125,13 +129,13 @@ export const InsightsSection = memo(({
       result.push({
         icon: Lightbulb,
         title: "Resumen",
-        text: "Datos de enero 2026 procesados desde paymentRecords.",
+        text: `Datos de ${monthLabel} procesados desde paymentRecords. ${formatNumber(total)} pagos en total.`,
         accentClass: "border-slate-500/30 bg-slate-500/5",
       });
     }
 
     return result;
-  }, [total, dailyAvg, lastDay, historicalData, topMovements, totalAmount, getDescription]);
+  }, [total, dailyAvg, lastDay, historicalData, topMovements, totalAmount, getDescription, yearKey, monthLabel]);
 
   return (
     <motion.section
@@ -156,7 +160,7 @@ export const InsightsSection = memo(({
         ))}
       </div>
       <p className="text-xs text-muted-foreground mt-4 pt-3 border-t border-slate-700/30">
-        Resumen generado con datos hasta día <strong>{lastDay}</strong> de enero 2026.
+        Resumen generado con datos hasta día <strong>{lastDay}</strong> de {monthLabel}.
       </p>
     </motion.section>
   );

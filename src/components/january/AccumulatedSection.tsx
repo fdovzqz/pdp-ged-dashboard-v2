@@ -27,6 +27,7 @@ export interface AccumulatedSectionProps {
   totalAmount?: number;
   lastAvailableDay: number;
   periods?: PeriodData;
+  monthLabel?: string;
 }
 
 const PERIOD_CONFIG = [
@@ -40,6 +41,7 @@ export const AccumulatedSection = memo(({
   totalAmount = 0,
   lastAvailableDay,
   periods,
+  monthLabel = "enero 2026",
 }: AccumulatedSectionProps): React.ReactElement => {
   const periodBars = useMemo(() => {
     if (!periods) return [];
@@ -67,7 +69,7 @@ export const AccumulatedSection = memo(({
     >
       <h3 className="text-lg font-semibold font-display mb-2">Total acumulado</h3>
       <p className="text-sm text-muted-foreground mb-6">
-        Pagos y recaudación hasta día {lastAvailableDay} de enero 2026
+        Pagos y recaudación hasta día {lastAvailableDay} de {monthLabel}
       </p>
 
       {periods && (

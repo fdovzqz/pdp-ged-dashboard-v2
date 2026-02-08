@@ -3,13 +3,16 @@
 import { useState, useCallback } from "react";
 import { motion } from "framer-motion";
 import { Building2, Download, Maximize2, Loader2 } from "lucide-react";
-import { ANALYSIS_MONTH_LABEL } from "@/lib/constants";
 
 export interface ContextHeaderProps {
   title: string;
   description?: string;
   lastAvailableDay?: number;
   onExportPdf?: () => Promise<void>;
+  monthLabel?: string;
+  monthShortName?: string;
+  selectedYear?: number;
+  monthSelector?: React.ReactNode;
 }
 
 export const ContextHeader = ({
@@ -17,6 +20,10 @@ export const ContextHeader = ({
   description,
   lastAvailableDay,
   onExportPdf,
+  monthLabel = "Enero 2026",
+  monthShortName = "Ene",
+  selectedYear = 2026,
+  monthSelector,
 }: ContextHeaderProps): React.ReactElement => {
   const [exporting, setExporting] = useState(false);
 
@@ -63,25 +70,26 @@ export const ContextHeader = ({
               {description}
             </p>
           )}
-          <div className="flex items-center gap-3 mt-3">
+          <div className="flex flex-wrap items-center gap-3 mt-3">
+            {monthSelector}
             {/* Badge LIVE with ping */}
             <span className="inline-flex items-center gap-1.5 px-3 py-1 bg-emerald-500/25 text-emerald-400 text-xs font-bold rounded-full border border-emerald-500/40">
               <span className="relative flex h-2 w-2">
                 <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-60" />
                 <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500" />
               </span>
-              DATOS ENERO
+              DATOS {monthShortName.toUpperCase()}
             </span>
 
             {/* Period badge */}
             <span className="inline-flex items-center px-3 py-1 bg-slate-800/60 text-slate-300 text-xs font-medium rounded-full border border-slate-700/50">
-              {ANALYSIS_MONTH_LABEL}
+              {monthLabel}
             </span>
 
             {/* Corte badge */}
             {lastAvailableDay !== undefined && lastAvailableDay > 0 && (
               <span className="inline-flex items-center px-3 py-1 bg-slate-800/60 text-slate-400 text-xs font-medium rounded-full border border-slate-700/50">
-                Corte: {lastAvailableDay} de Enero, 2026
+                Corte: {lastAvailableDay} de {monthShortName}, {selectedYear}
               </span>
             )}
           </div>

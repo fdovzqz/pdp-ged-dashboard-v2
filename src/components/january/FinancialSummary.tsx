@@ -29,16 +29,18 @@ export interface AmountTotals {
 export interface FinancialSummaryProps {
   amountTotals: AmountTotals | undefined;
   topMovements: Array<{ movimiento: string; totalAmount: number; count: number }>;
+  yearKey?: string;
 }
 
 export const FinancialSummary = memo(({
   amountTotals,
   topMovements,
+  yearKey = "2026",
 }: FinancialSummaryProps): React.ReactElement => {
   const getDescription = useGetMovementDescription();
   const [sortBy, setSortBy] = useState<SortByMovement>("monto");
 
-  const v = amountTotals?.["2026"] ?? { totalAmount: 0, events: 0, ticketPromedio: 0 };
+  const v = amountTotals?.[yearKey] ?? { totalAmount: 0, events: 0, ticketPromedio: 0 };
 
   const paretoInfo = useMemo(() => {
     if (!topMovements || topMovements.length === 0 || v.totalAmount <= 0) return null;

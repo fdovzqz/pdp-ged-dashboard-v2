@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import Link from "next/link";
 
 interface MovimientoStats {
   total: number;
@@ -112,12 +113,12 @@ export default function V1Page() {
                 ReconciliationProcessAndConfirmationStateMachine (sin V2)
               </p>
             </div>
-            <a
+            <Link
               href="/"
               className="text-blue-600 hover:text-blue-800 text-sm font-medium"
             >
               ← Volver a V2
-            </a>
+            </Link>
           </div>
 
           {/* Indicador de versión */}

@@ -96,7 +96,7 @@ export async function queryPayments(
 
     // Esperar resultados (polling)
     let status: QueryStatus | undefined = QueryStatus.Running;
-    let results: QueryResult = {
+    const results: QueryResult = {
       status: "Running",
       results: [],
     };

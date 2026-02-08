@@ -118,6 +118,46 @@ const V2_COLOR = "#818cf8";
 /* ──────── Component ──────── */
 export const PaymentChannelsSection = memo(
   ({ data }: PaymentChannelsSectionProps): React.ReactElement => {
+    const [viewMode, setViewMode] = useState<ViewMode>("volumen");
+
+    /* Donut data: volumen (count) or monto */
+    const pieData = useMemo(() => {
+      if (!data) return [];
+      const { evo, ventanilla } = data;
+      return [
+        {
+          name: "EVO · Pago en Línea",
+          count: evo.count,
+          monto: evo.monto,
+          pct: viewMode === "volumen" ? evo.pctCount : evo.pctMonto,
+          value: viewMode === "volumen" ? evo.count : evo.monto,
+          color: EVO_COLOR,
+        },
+        {
+          name: "Transferencias + Presencial con Edo. de Cuenta del Portal",
+          count: ventanilla.count,
+          monto: ventanilla.monto,
+          pct: viewMode === "volumen" ? ventanilla.pctCount : ventanilla.pctMonto,
+          value: viewMode === "volumen" ? ventanilla.count : ventanilla.monto,
+          color: VENTANILLA_COLOR,
+        },
+      ];
+    }, [data, viewMode]);
+
+    /* Bar chart data: volumen or monto by day */
+    const barData = useMemo(() => {
+      if (!data) return [];
+      const { dailyByChannel } = data;
+      return dailyByChannel.map((d) => {
+        const dayNum = parseInt(d.date.split("-")[2] ?? "0", 10);
+        return {
+          name: String(dayNum),
+          evo: viewMode === "volumen" ? d.evo : d.evoMonto,
+          ventanilla: viewMode === "volumen" ? d.ventanilla : d.ventanillaMonto,
+        };
+      });
+    }, [data, viewMode]);
+
     if (!data) {
       return (
         <motion.div
@@ -137,44 +177,7 @@ export const PaymentChannelsSection = memo(
       );
     }
 
-    const { evo, ventanilla, totalCount, totalMonto, dailyByChannel } = data;
-
-    const [viewMode, setViewMode] = useState<ViewMode>("volumen");
-
-    /* Donut data: volumen (count) or monto */
-    const pieData = useMemo(
-      () => [
-        {
-          name: "EVO · Pago en Línea",
-          count: evo.count,
-          monto: evo.monto,
-          pct: viewMode === "volumen" ? evo.pctCount : evo.pctMonto,
-          value: viewMode === "volumen" ? evo.count : evo.monto,
-          color: EVO_COLOR,
-        },
-        {
-          name: "Transferencias + Presencial con Edo. de Cuenta del Portal",
-          count: ventanilla.count,
-          monto: ventanilla.monto,
-          pct: viewMode === "volumen" ? ventanilla.pctCount : ventanilla.pctMonto,
-          value: viewMode === "volumen" ? ventanilla.count : ventanilla.monto,
-          color: VENTANILLA_COLOR,
-        },
-      ],
-      [evo, ventanilla, viewMode]
-    );
-
-    /* Bar chart data: volumen or monto by day */
-    const barData = useMemo(() => {
-      return dailyByChannel.map((d) => {
-        const dayNum = parseInt(d.date.split("-")[2] ?? "0", 10);
-        return {
-          name: String(dayNum),
-          evo: viewMode === "volumen" ? d.evo : d.evoMonto,
-          ventanilla: viewMode === "volumen" ? d.ventanilla : d.ventanillaMonto,
-        };
-      });
-    }, [dailyByChannel, viewMode]);
+    const { evo, ventanilla, totalCount, totalMonto } = data;
 
     return (
       <motion.section

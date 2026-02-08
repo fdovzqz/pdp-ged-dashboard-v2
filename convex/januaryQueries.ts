@@ -4,6 +4,19 @@ import { getMovementConfig, normalizeWithConfig } from "./movementCodes";
 
 const JANUARY_MONTH = 1;
 
+/** Meses con datos agregados disponibles (YYYY-MM, ordenados descendente). */
+export const getAvailableMonths = query({
+  args: {},
+  handler: async (ctx) => {
+    const monthly = await ctx.db.query("monthlyData").collect();
+    const seen = new Set<string>();
+    for (const m of monthly) {
+      seen.add(`${m.year}-${String(m.month).padStart(2, "0")}`);
+    }
+    return Array.from(seen).sort((a, b) => b.localeCompare(a));
+  },
+});
+
 /** Datos históricos diarios por año para comparativa. */
 export const getHistoricalData = query({
   args: { month: v.optional(v.number()) },
@@ -589,10 +602,14 @@ export const getHeatmapAmountData = query({
  * Usa exclusivamente monthStats.dayEntries (precalculado) para evitar el límite
  * de 8192 items de Convex en paymentRecords.collect(). */
 export const getPaymentChannelStats = query({
-  args: { month: v.optional(v.number()) },
-  handler: async (ctx, { month: monthArg }) => {
+  args: {
+    month: v.optional(v.number()),
+    year: v.optional(v.number()),
+  },
+  handler: async (ctx, { month: monthArg, year: yearArg }) => {
     const month = monthArg ?? JANUARY_MONTH;
-    const monthKey = `2026-${String(month).padStart(2, "0")}`;
+    const year = yearArg ?? 2026;
+    const monthKey = `${year}-${String(month).padStart(2, "0")}`;
 
     const doc = await ctx.db
       .query("monthStats")
