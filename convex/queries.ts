@@ -36,6 +36,20 @@ export const getMonthStats = query({
   },
 });
 
+/** Resumen de todos los meses con datos (para grilla de Registros Cargados). */
+export const getAllMonthsStatus = query({
+  args: {},
+  handler: async (ctx) => {
+    const allStats = await ctx.db.query("monthStats").collect();
+    return allStats.map((s) => ({
+      month: s.month,
+      totalRecords: s.ingestionStatus.totalRecords,
+      daysWithData: s.ingestionStatus.daysWithData,
+      lastUpdated: s.lastUpdated,
+    }));
+  },
+});
+
 /** Query paginada para evitar límite de retorno (8192 items). Usar en Detalle. */
 export const getPaymentsByMonthPaginated = query({
   args: {

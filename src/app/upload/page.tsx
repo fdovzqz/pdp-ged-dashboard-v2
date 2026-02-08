@@ -21,17 +21,24 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { Upload, Loader2, Save, Plus, Trash2, RefreshCw, Settings } from "lucide-react";
+import { Upload, Loader2, Save, Plus, Trash2, RefreshCw } from "lucide-react";
 import { SyncDialog } from "@/components/dashboard/SyncDialog";
 import { IngestionStatus } from "@/components/dashboard/IngestionStatus";
-import { ANALYSIS_MONTH_STRING } from "@/lib/constants";
+import {
+  PERIOD_START,
+  PERIOD_END,
+  generateMonthRange,
+  ANALYSIS_MONTH_STRING,
+} from "@/lib/constants";
 
-const MONTHS = [ANALYSIS_MONTH_STRING] as const;
-const MONTH = ANALYSIS_MONTH_STRING;
+const ALL_MONTHS = generateMonthRange(PERIOD_START, PERIOD_END);
 
 export default function UploadPage(): React.ReactElement {
+  const [startMonth, setStartMonth] = useState(PERIOD_START);
+  const [endMonth, setEndMonth] = useState(PERIOD_END);
+  const [selectedMonth, setSelectedMonth] = useState<string | null>(null);
   const [selectedMonths, setSelectedMonths] = useState<Set<string>>(
-    new Set(MONTHS)
+    new Set([ANALYSIS_MONTH_STRING])
   );
   const [running, setRunning] = useState(false);
   const [seeding, setSeeding] = useState(false);
@@ -44,12 +51,14 @@ export default function UploadPage(): React.ReactElement {
   const [newDescripcion, setNewDescripcion] = useState("");
   const [newAliasVariante, setNewAliasVariante] = useState("");
   const [newAliasCodigo, setNewAliasCodigo] = useState("");
-  const [showAdmin, setShowAdmin] = useState(false);
   const [syncDialogOpen, setSyncDialogOpen] = useState(false);
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [syncing, setSyncing] = useState(false);
   const [syncProgress, setSyncProgress] = useState(0);
   const [syncCurrentDay, setSyncCurrentDay] = useState(0);
+  const [syncCurrentMonth, setSyncCurrentMonth] = useState<string>("");
+  const [syncCurrentMonthIndex, setSyncCurrentMonthIndex] = useState(0);
+  const [syncTotalDays, setSyncTotalDays] = useState(0);
   const [syncResults, setSyncResults] = useState<{
     inserted: number;
     deleted: number;
@@ -57,9 +66,12 @@ export default function UploadPage(): React.ReactElement {
   } | null>(null);
   const [syncError, setSyncError] = useState<string | null>(null);
   const [deleting, setDeleting] = useState(false);
-  const [recreatingStats, setRecreatingStats] = useState(false);
 
-  const dashboardData = useQuery(api.queries.getMonthStats, { month: MONTH });
+  const allMonthsStatus = useQuery(api.queries.getAllMonthsStatus, {});
+  const selectedMonthStats = useQuery(
+    api.queries.getMonthStats,
+    selectedMonth ? { month: selectedMonth } : "skip"
+  );
   const codes = useQuery(api.movementCodes.listMovementCodes);
   const aliases = useQuery(api.movementCodes.listMovementAliases);
   const buildAggregates = useAction(api.januaryETL.buildJanuaryAggregates);
@@ -69,14 +81,22 @@ export default function UploadPage(): React.ReactElement {
   const upsertAlias = useMutation(api.movementCodes.upsertMovementAlias);
   const deleteAlias = useMutation(api.movementCodes.deleteMovementAlias);
   const fetchAndIngest = useAction(api.actions.fetchAndIngestForDate);
-  const recreateMonthStats = useAction(
-    api.actions.recreateMonthStatsFromPaymentRecords
-  );
   const deletePaymentsByMonth = useMutation(api.mutations.deletePaymentsByMonth);
   const deleteMonthStats = useMutation(api.mutations.deleteMonthStats);
 
-  const [y, m] = MONTH.split("-").map(Number);
-  const daysInMonth = new Date(y, m, 0).getDate();
+  const periodMonths = generateMonthRange(startMonth, endMonth);
+  const totalDaysInPeriod = periodMonths.reduce((acc, month) => {
+    const [y, m] = month.split("-").map(Number);
+    return acc + new Date(y, m, 0).getDate();
+  }, 0);
+
+  const daysInFirstMonth =
+    periodMonths.length > 0
+      ? (() => {
+          const [y, m] = periodMonths[0].split("-").map(Number);
+          return new Date(y, m, 0).getDate();
+        })()
+      : 31;
 
   const handleStartSync = useCallback(async (): Promise<void> => {
     setSyncing(true);
@@ -88,18 +108,31 @@ export default function UploadPage(): React.ReactElement {
     let totalInserted = 0;
     let totalDeleted = 0;
     const failedDays: string[] = [];
+    let processedDays = 0;
 
-    for (let d = 1; d <= daysInMonth; d++) {
-      const dateStr = `${MONTH}-${String(d).padStart(2, "0")}`;
-      setSyncCurrentDay(d);
-      setSyncProgress((d / daysInMonth) * 100);
+    for (let monthIdx = 0; monthIdx < periodMonths.length; monthIdx++) {
+      const month = periodMonths[monthIdx];
+      const [y, m] = month.split("-").map(Number);
+      const daysInMonth = new Date(y, m, 0).getDate();
 
-      try {
-        const result = await fetchAndIngest({ date: dateStr });
-        totalInserted += result.inserted ?? 0;
-        totalDeleted += result.deleted ?? 0;
-      } catch {
-        failedDays.push(dateStr);
+      setSyncCurrentMonth(month);
+      setSyncCurrentMonthIndex(monthIdx + 1);
+      setSyncTotalDays(daysInMonth);
+
+      for (let d = 1; d <= daysInMonth; d++) {
+        const dateStr = `${month}-${String(d).padStart(2, "0")}`;
+        setSyncCurrentDay(d);
+
+        try {
+          const res = await fetchAndIngest({ date: dateStr });
+          totalInserted += res.inserted ?? 0;
+          totalDeleted += res.deleted ?? 0;
+        } catch {
+          failedDays.push(dateStr);
+        }
+
+        processedDays += 1;
+        setSyncProgress((processedDays / totalDaysInPeriod) * 100);
       }
     }
 
@@ -110,31 +143,23 @@ export default function UploadPage(): React.ReactElement {
     });
     setSyncError(
       failedDays.length > 0
-        ? `Días con error (${failedDays.length}): ${failedDays.join(", ")}. Límite 600s/día. Reintenta esos días.`
+        ? `Días con error (${failedDays.length}): ${failedDays.slice(0, 5).join(", ")}${failedDays.length > 5 ? "..." : ""}. Límite 600s/día. Reintenta esos días.`
         : null
     );
     setSyncing(false);
-  }, [fetchAndIngest, daysInMonth]);
+  }, [fetchAndIngest, periodMonths, totalDaysInPeriod]);
 
-  const handleRecreateStats = useCallback(async (): Promise<void> => {
-    setRecreatingStats(true);
-    try {
-      await recreateMonthStats({ month: MONTH });
-    } catch (err) {
-      console.error(err);
-    } finally {
-      setRecreatingStats(false);
-    }
-  }, [recreateMonthStats]);
-
-  const handleDelete = useCallback(async (): Promise<void> => {
+  const handleDeleteAll = useCallback(async (): Promise<void> => {
     setDeleting(true);
     try {
-      while (true) {
-        const result = await deletePaymentsByMonth({ month: MONTH });
-        if (result.deleted === 0) break;
+      const allMonthsToDelete = ALL_MONTHS;
+      for (const month of allMonthsToDelete) {
+        while (true) {
+          const res = await deletePaymentsByMonth({ month });
+          if (res.deleted === 0) break;
+        }
+        await deleteMonthStats({ month });
       }
-      await deleteMonthStats({ month: MONTH });
       setDeleteDialogOpen(false);
     } catch (err) {
       console.error(err);
@@ -252,85 +277,131 @@ export default function UploadPage(): React.ReactElement {
   };
 
   return (
-    <div className="min-h-screen bg-january bg-grid p-6 md:p-8">
+    <div
+      className="min-h-screen bg-january bg-grid p-6 md:p-8"
+      suppressHydrationWarning
+    >
       <div className="max-w-2xl mx-auto space-y-8">
-        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-          <div>
-            <h1 className="text-3xl font-bold tracking-tight font-space-grotesk gradient-text-emerald">
-              Gestión de datos
-            </h1>
-            <p className="text-muted-foreground mt-1">
-              Carga datos desde CloudWatch, genera tablas agregadas y gestiona
-              códigos de movimiento.
-            </p>
-          </div>
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={() => setShowAdmin(!showAdmin)}
-            className="text-muted-foreground hover:text-foreground gap-2 self-start"
-          >
-            <Settings className="w-4 h-4" />
-            Controles de carga
-          </Button>
+        <div>
+          <h1 className="text-3xl font-bold tracking-tight font-space-grotesk gradient-text-emerald">
+            Gestión de datos
+          </h1>
+          <p className="text-muted-foreground mt-1">
+            Carga datos desde CloudWatch, genera tablas agregadas y gestiona
+            códigos de movimiento.
+          </p>
         </div>
 
-        {/* Controles de carga (Sync, Recreate, Delete) */}
-        {showAdmin && (
-          <div className="glass-card rounded-xl p-6 space-y-4">
-            <h2 className="text-lg font-semibold">Carga de datos</h2>
-            <p className="text-sm text-muted-foreground">
-              Sincroniza desde CloudWatch, regenera estadísticas o limpia datos
-              del mes.
-            </p>
+        {/* Carga de datos - siempre visible */}
+        <div className="glass-card rounded-xl p-6 space-y-4">
+          <h2 className="text-lg font-semibold">Carga de datos</h2>
+          <p className="text-sm text-muted-foreground">
+            Sincroniza desde CloudWatch por período o borra todos los datos.
+          </p>
+          <div className="flex flex-wrap gap-4 items-end">
+            <div className="flex flex-col gap-1">
+              <label className="text-xs text-muted-foreground">
+                Período desde
+              </label>
+              <select
+                value={startMonth}
+                onChange={(e) => setStartMonth(e.target.value)}
+                className="bg-slate-800 border border-slate-600 rounded px-3 py-2 text-sm"
+              >
+                {ALL_MONTHS.map((m) => (
+                  <option key={m} value={m}>
+                    {m}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div className="flex flex-col gap-1">
+              <label className="text-xs text-muted-foreground">hasta</label>
+              <select
+                value={endMonth}
+                onChange={(e) => setEndMonth(e.target.value)}
+                className="bg-slate-800 border border-slate-600 rounded px-3 py-2 text-sm"
+              >
+                {ALL_MONTHS.map((m) => (
+                  <option key={m} value={m}>
+                    {m}
+                  </option>
+                ))}
+              </select>
+            </div>
             <div className="flex flex-wrap gap-2">
               <Button
                 size="sm"
                 onClick={() => setSyncDialogOpen(true)}
+                disabled={syncing}
                 className="gap-2 bg-indigo-600 hover:bg-indigo-700"
               >
                 <RefreshCw className="size-3.5" />
-                Sincronizar Mes
-              </Button>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={handleRecreateStats}
-                disabled={recreatingStats}
-                className="gap-2 bg-white/[0.03] border-border/50"
-              >
-                <RefreshCw
-                  className={`size-3.5 ${recreatingStats ? "animate-spin" : ""}`}
-                />
-                {recreatingStats ? "Regenerando..." : "Regenerar Stats"}
+                Sincronizar Período
               </Button>
               <Button
                 variant="outline"
                 size="sm"
                 onClick={() => setDeleteDialogOpen(true)}
-                className="gap-2 bg-white/[0.03] border-border/50 text-red-400 hover:text-red-300"
+                disabled={syncing}
+                className="gap-2 bg-white/3 border-border/50 text-red-400 hover:text-red-300"
               >
                 <Trash2 className="size-3.5" />
-                Limpiar Datos
+                Borrar Todo
               </Button>
             </div>
           </div>
-        )}
+        </div>
 
-        {/* Ingestion Status */}
-        {dashboardData?.ingestionStatus && (
-          <IngestionStatus
-            month={dashboardData.ingestionStatus.month}
-            totalRecords={dashboardData.ingestionStatus.totalRecords}
-            daysWithData={dashboardData.ingestionStatus.daysWithData}
-            byDate={dashboardData.ingestionStatus.byDate}
-          />
-        )}
+        {/* Registros Cargados - grilla de meses */}
+        <section>
+          <h2 className="text-lg font-semibold mb-3">Registros cargados</h2>
+          {allMonthsStatus ? (
+            <IngestionStatus
+              allMonthsStatus={allMonthsStatus}
+              selectedMonth={selectedMonth}
+              selectedMonthDetail={
+                selectedMonth && selectedMonthStats?.ingestionStatus
+                  ? {
+                      totalRecords: selectedMonthStats.ingestionStatus.totalRecords,
+                      daysWithData: selectedMonthStats.ingestionStatus.daysWithData,
+                      byDate: selectedMonthStats.ingestionStatus.byDate,
+                    }
+                  : undefined
+              }
+              onMonthSelect={setSelectedMonth}
+            />
+          ) : (
+            <div className="glass-card rounded-xl p-5 text-muted-foreground text-sm">
+              Cargando...
+            </div>
+          )}
+        </section>
 
         <div className="glass-card rounded-xl p-6 space-y-4">
           <h2 className="text-lg font-semibold">Meses a procesar</h2>
+          <div className="flex flex-wrap gap-2 items-center">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setSelectedMonths(new Set(ALL_MONTHS))}
+              disabled={running}
+              className="bg-white/3 border-border/50"
+            >
+              Seleccionar todos
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setSelectedMonths(new Set())}
+              disabled={running}
+              className="bg-white/3 border-border/50"
+            >
+              Deseleccionar todos
+            </Button>
+          </div>
           <div className="flex flex-wrap gap-2">
-            {MONTHS.map((m) => (
+            {ALL_MONTHS.map((m) => (
               <label
                 key={m}
                 className="flex items-center gap-2 cursor-pointer px-4 py-2 rounded-lg border border-slate-700/50 hover:bg-slate-800/30"
@@ -341,6 +412,7 @@ export default function UploadPage(): React.ReactElement {
                   onChange={() => toggleMonth(m)}
                   disabled={running}
                   className="rounded"
+                  suppressHydrationWarning
                 />
                 <span>{m}</span>
               </label>
@@ -618,26 +690,31 @@ export default function UploadPage(): React.ReactElement {
         syncing={syncing}
         progress={syncProgress}
         currentDay={syncCurrentDay}
-        totalDays={daysInMonth}
+        totalDays={syncing ? syncTotalDays : daysInFirstMonth}
         results={syncResults}
         error={syncError}
-        month={MONTH}
+        month={startMonth}
+        startMonth={startMonth}
+        endMonth={endMonth}
+        currentMonth={syncCurrentMonth}
+        currentMonthIndex={syncCurrentMonthIndex}
+        totalMonths={periodMonths.length}
       />
 
       <Dialog open={deleteDialogOpen} onOpenChange={setDeleteDialogOpen}>
         <DialogContent className="glass-card-elevated border-border/50">
           <DialogHeader>
-            <DialogTitle>Limpiar datos del mes</DialogTitle>
+            <DialogTitle>Borrar todo</DialogTitle>
             <DialogDescription>
-              Se eliminarán todos los registros de {MONTH}. Esta acción no se
-              puede deshacer. Los datos se pueden volver a sincronizar desde
-              CloudWatch.
+              Se eliminarán todos los registros de pago y estadísticas de {PERIOD_START} a {PERIOD_END}.
+              Esta acción no se puede deshacer. Los datos se pueden volver a
+              sincronizar desde CloudWatch.
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
             <Button
               variant="destructive"
-              onClick={handleDelete}
+              onClick={handleDeleteAll}
               disabled={deleting}
               size="sm"
             >
@@ -648,7 +725,7 @@ export default function UploadPage(): React.ReactElement {
               onClick={() => setDeleteDialogOpen(false)}
               disabled={deleting}
               size="sm"
-              className="bg-white/[0.03] border-border/50"
+              className="bg-white/3 border-border/50"
             >
               Cancelar
             </Button>

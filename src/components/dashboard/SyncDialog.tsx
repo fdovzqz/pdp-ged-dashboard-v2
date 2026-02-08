@@ -22,6 +22,15 @@ interface SyncDialogProps {
   results: { inserted: number; deleted: number; failedDays?: string[] } | null;
   error: string | null;
   month: string;
+  /** Multi-mes: rango del periodo. */
+  startMonth?: string;
+  endMonth?: string;
+  /** Multi-mes: mes actualmente procesado. */
+  currentMonth?: string;
+  /** Multi-mes: índice del mes actual (1-based). */
+  currentMonthIndex?: number;
+  /** Multi-mes: total de meses en el periodo. */
+  totalMonths?: number;
 }
 
 export const SyncDialog = ({
@@ -35,22 +44,37 @@ export const SyncDialog = ({
   results,
   error,
   month,
+  startMonth,
+  endMonth,
+  currentMonth,
+  currentMonthIndex = 1,
+  totalMonths = 1,
 }: SyncDialogProps): React.ReactElement => {
+  const isMultiMonth =
+    startMonth !== undefined &&
+    endMonth !== undefined &&
+    totalMonths > 1;
+
+  const descriptionText = isMultiMonth
+    ? `Se extraerán datos de CloudWatch para cada día del periodo ${startMonth} a ${endMonth}. Cada día tiene límite de 600s (Convex). Si un día falla, los demás continúan.`
+    : `Se extraerán datos de CloudWatch para cada día de ${month}. Cada día tiene límite de 600s (Convex). Si un día falla, los demás continúan.`;
+
+  const progressText = isMultiMonth
+    ? `Mes ${currentMonthIndex} de ${totalMonths} (${currentMonth ?? month}) — Día ${currentDay} de ${totalDays}`
+    : `Procesando día ${currentDay} de ${totalDays}...`;
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
-          <DialogTitle>Sincronizar mes completo</DialogTitle>
-          <DialogDescription>
-            Se extraerán datos de CloudWatch para cada día de {month}. Cada día
-            tiene límite de 600s (Convex). Si un día falla, los demás continúan.
-          </DialogDescription>
+          <DialogTitle>
+            {isMultiMonth ? "Sincronizar período" : "Sincronizar mes completo"}
+          </DialogTitle>
+          <DialogDescription>{descriptionText}</DialogDescription>
         </DialogHeader>
         {syncing && (
           <div className="space-y-2">
-            <p className="text-sm text-muted-foreground">
-              Procesando día {currentDay} de {totalDays}...
-            </p>
+            <p className="text-sm text-muted-foreground">{progressText}</p>
             <Progress value={progress} />
           </div>
         )}

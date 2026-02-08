@@ -1,24 +1,91 @@
 "use client";
 
 import { motion } from "framer-motion";
+import { MonthsStatusGrid } from "./MonthsStatusGrid";
 
 interface DayStatus {
   date: string;
   count: number;
 }
 
+interface MonthStatus {
+  month: string;
+  totalRecords: number;
+  daysWithData: number;
+  lastUpdated: number;
+}
+
 interface IngestionStatusProps {
+  /** Modo single-month (backward compat): datos de un mes. */
+  month?: string;
+  totalRecords?: number;
+  daysWithData?: number;
+  byDate?: DayStatus[];
+  /** Modo multi-mes: grilla + detalle al seleccionar. */
+  allMonthsStatus?: MonthStatus[];
+  selectedMonth?: string | null;
+  selectedMonthDetail?: {
+    totalRecords: number;
+    daysWithData: number;
+    byDate: DayStatus[];
+  };
+  onMonthSelect?: (month: string | null) => void;
+}
+
+export const IngestionStatus = ({
+  month,
+  totalRecords = 0,
+  daysWithData = 0,
+  byDate = [],
+  allMonthsStatus,
+  selectedMonth,
+  selectedMonthDetail,
+  onMonthSelect,
+}: IngestionStatusProps): React.ReactElement => {
+  const isMultiMonthMode = allMonthsStatus !== undefined;
+
+  if (isMultiMonthMode && allMonthsStatus) {
+    return (
+      <div className="space-y-4">
+        <MonthsStatusGrid
+          allMonthsStatus={allMonthsStatus}
+          selectedMonth={selectedMonth ?? null}
+          onMonthSelect={onMonthSelect ?? (() => {})}
+        />
+        {selectedMonth && selectedMonthDetail && selectedMonthDetail.byDate.length > 0 && (
+          <DayDetailHeatmap
+            month={selectedMonth}
+            totalRecords={selectedMonthDetail.totalRecords}
+            daysWithData={selectedMonthDetail.daysWithData}
+            byDate={selectedMonthDetail.byDate}
+          />
+        )}
+      </div>
+    );
+  }
+
+  return (
+    <DayDetailHeatmap
+      month={month ?? ""}
+      totalRecords={totalRecords}
+      daysWithData={daysWithData}
+      byDate={byDate}
+    />
+  );
+};
+
+interface DayDetailHeatmapProps {
   month: string;
   totalRecords: number;
   daysWithData: number;
   byDate: DayStatus[];
 }
 
-export const IngestionStatus = ({
+const DayDetailHeatmap = ({
   totalRecords,
   daysWithData,
   byDate,
-}: IngestionStatusProps): React.ReactElement => {
+}: DayDetailHeatmapProps): React.ReactElement => {
   const maxCount = Math.max(...byDate.map((d) => d.count), 1);
 
   return (
@@ -33,14 +100,21 @@ export const IngestionStatus = ({
           <p className="text-[10px] font-medium text-muted-foreground uppercase tracking-wider mb-0.5">
             Registros Cargados
           </p>
-          <p className="text-lg font-bold tabular-nums">{totalRecords.toLocaleString()}</p>
+          <p className="text-lg font-bold tabular-nums">
+            {totalRecords.toLocaleString()}
+          </p>
         </div>
         <div className="w-px h-8 bg-border/50" />
         <div>
           <p className="text-[10px] font-medium text-muted-foreground uppercase tracking-wider mb-0.5">
             D&iacute;as con Datos
           </p>
-          <p className="text-lg font-bold tabular-nums">{daysWithData} <span className="text-sm text-muted-foreground font-normal">/ 31</span></p>
+          <p className="text-lg font-bold tabular-nums">
+            {daysWithData}{" "}
+            <span className="text-sm text-muted-foreground font-normal">
+              / 31
+            </span>
+          </p>
         </div>
       </div>
 
@@ -64,7 +138,10 @@ export const IngestionStatus = ({
                     className="w-7 h-7 rounded-md flex items-center justify-center text-[9px] font-medium transition-transform group-hover:scale-110"
                     style={{
                       backgroundColor: `rgba(129, 140, 248, ${0.08 + intensity * 0.5})`,
-                      color: intensity > 0.5 ? "rgba(255,255,255,0.9)" : "rgba(255,255,255,0.4)",
+                      color:
+                        intensity > 0.5
+                          ? "rgba(255,255,255,0.9)"
+                          : "rgba(255,255,255,0.4)",
                     }}
                   >
                     {dayNum}
