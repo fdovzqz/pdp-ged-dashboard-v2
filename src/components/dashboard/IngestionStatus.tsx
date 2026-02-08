@@ -82,11 +82,14 @@ interface DayDetailHeatmapProps {
 }
 
 const DayDetailHeatmap = ({
+  month,
   totalRecords,
   daysWithData,
   byDate,
 }: DayDetailHeatmapProps): React.ReactElement => {
   const maxCount = Math.max(...byDate.map((d) => d.count), 1);
+  const [y, m] = month.split("-").map(Number);
+  const daysInMonth = new Date(y, m, 0).getDate();
 
   return (
     <motion.div
@@ -112,7 +115,7 @@ const DayDetailHeatmap = ({
           <p className="text-lg font-bold tabular-nums">
             {daysWithData}{" "}
             <span className="text-sm text-muted-foreground font-normal">
-              / 31
+              / {daysInMonth}
             </span>
           </p>
         </div>

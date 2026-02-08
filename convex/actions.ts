@@ -263,7 +263,7 @@ export const fetchAndIngestForDate = action({
         movimiento,
         ...d,
       })),
-      refs: records.map((r) => r.referencia),
+      refs: [], // Omitir refs para evitar payload > 1 MiB (límite Convex)
     };
     await ctx.runMutation(api.mutations.updateMonthStatsFromDay, {
       month,

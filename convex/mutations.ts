@@ -176,7 +176,9 @@ export const updateMonthStatsFromDay = mutation({
 
     const totalPagos = dayEntries.reduce((s, e) => s + e.count, 0);
     const montoTotal = dayEntries.reduce((s, e) => s + e.monto, 0);
-    const referenciasUnicas = new Set(dayEntries.flatMap((e) => e.refs)).size;
+    const allRefs = dayEntries.flatMap((e) => e.refs);
+    const referenciasUnicas =
+      allRefs.length > 0 ? new Set(allRefs).size : totalPagos;
     const diasConDatos = dayEntries.filter((e) => e.count > 0).length;
     const promedioDiario =
       diasConDatos > 0 ? Math.round(totalPagos / diasConDatos) : 0;
@@ -272,9 +274,15 @@ export const updateMonthStatsFromDay = mutation({
       .map((e) => ({ date: e.date, count: e.count }))
       .sort((a, b) => a.date.localeCompare(b.date));
 
+    // Omitir refs en dayEntries para evitar documento > 1 MiB (límite Convex)
+    const dayEntriesForStorage = dayEntries.map(({ refs: _, ...rest }) => ({
+      ...rest,
+      refs: [],
+    }));
+
     const stats = {
       month,
-      dayEntries,
+      dayEntries: dayEntriesForStorage,
       kpis: {
         totalPagos,
         montoTotal,

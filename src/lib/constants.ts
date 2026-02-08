@@ -22,6 +22,28 @@ export const PERIOD_START = "2024-01";
 /** Fin del período disponible para extracción CloudWatch (febrero 2026). */
 export const PERIOD_END = "2026-02";
 
+/** Fecha inicial del período (formato YYYY-MM-DD). */
+export const PERIOD_START_DATE = "2024-01-01";
+
+/** Fecha final del período (último día de feb 2026). */
+export const PERIOD_END_DATE = "2026-02-28";
+
+/** Genera array de fechas YYYY-MM-DD entre start y end inclusive. */
+export function generateDateRange(start: string, end: string): string[] {
+  const dates: string[] = [];
+  const [sy, sm, sd] = start.split("-").map(Number);
+  const [ey, em, ed] = end.split("-").map(Number);
+  const current = new Date(sy, sm - 1, sd);
+  const endDate = new Date(ey, em - 1, ed);
+  while (current <= endDate) {
+    dates.push(
+      `${current.getFullYear()}-${String(current.getMonth() + 1).padStart(2, "0")}-${String(current.getDate()).padStart(2, "0")}`
+    );
+    current.setDate(current.getDate() + 1);
+  }
+  return dates;
+}
+
 /** Genera array de todos los meses YYYY-MM entre start y end inclusive. */
 export function generateMonthRange(start: string, end: string): string[] {
   const months: string[] = [];

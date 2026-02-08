@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback } from "react";
+import { useState, useCallback, useRef, useEffect } from "react";
 import { useAction, useMutation, useQuery } from "convex/react";
 import { api } from "convex/_generated/api";
 import { Button } from "@/components/ui/button";
@@ -27,15 +27,19 @@ import { IngestionStatus } from "@/components/dashboard/IngestionStatus";
 import {
   PERIOD_START,
   PERIOD_END,
+  PERIOD_START_DATE,
+  PERIOD_END_DATE,
   generateMonthRange,
+  generateDateRange,
   ANALYSIS_MONTH_STRING,
 } from "@/lib/constants";
 
 const ALL_MONTHS = generateMonthRange(PERIOD_START, PERIOD_END);
+const SYNC_STORAGE_KEY = "reconciliation-sync-in-progress";
 
 export default function UploadPage(): React.ReactElement {
-  const [startMonth, setStartMonth] = useState(PERIOD_START);
-  const [endMonth, setEndMonth] = useState(PERIOD_END);
+  const [startDate, setStartDate] = useState(PERIOD_START_DATE);
+  const [endDate, setEndDate] = useState(PERIOD_END_DATE);
   const [selectedMonth, setSelectedMonth] = useState<string | null>(null);
   const [selectedMonths, setSelectedMonths] = useState<Set<string>>(
     new Set([ANALYSIS_MONTH_STRING])
@@ -53,12 +57,12 @@ export default function UploadPage(): React.ReactElement {
   const [newAliasCodigo, setNewAliasCodigo] = useState("");
   const [syncDialogOpen, setSyncDialogOpen] = useState(false);
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
+  const [deleteMonthDialogOpen, setDeleteMonthDialogOpen] = useState(false);
   const [syncing, setSyncing] = useState(false);
   const [syncProgress, setSyncProgress] = useState(0);
-  const [syncCurrentDay, setSyncCurrentDay] = useState(0);
-  const [syncCurrentMonth, setSyncCurrentMonth] = useState<string>("");
-  const [syncCurrentMonthIndex, setSyncCurrentMonthIndex] = useState(0);
-  const [syncTotalDays, setSyncTotalDays] = useState(0);
+  const [syncCurrentDate, setSyncCurrentDate] = useState<string>("");
+  const [syncCurrentIndex, setSyncCurrentIndex] = useState(0);
+  const [syncTotalDates, setSyncTotalDates] = useState(0);
   const [syncResults, setSyncResults] = useState<{
     inserted: number;
     deleted: number;
@@ -66,6 +70,22 @@ export default function UploadPage(): React.ReactElement {
   } | null>(null);
   const [syncError, setSyncError] = useState<string | null>(null);
   const [deleting, setDeleting] = useState(false);
+  const syncCancelledRef = useRef(false);
+
+  useEffect(() => {
+    try {
+      const stored = localStorage.getItem(SYNC_STORAGE_KEY);
+      if (stored) {
+        localStorage.removeItem(SYNC_STORAGE_KEY);
+        setSyncDialogOpen(true);
+        setSyncError(
+          "La sincronización anterior fue interrumpida (recarga o cierre de pestaña). Puedes iniciar una nueva sincronización."
+        );
+      }
+    } catch {
+      // Ignorar errores de localStorage (SSR, modo privado)
+    }
+  }, []);
 
   const allMonthsStatus = useQuery(api.queries.getAllMonthsStatus, {});
   const selectedMonthStats = useQuery(
@@ -84,70 +104,83 @@ export default function UploadPage(): React.ReactElement {
   const deletePaymentsByMonth = useMutation(api.mutations.deletePaymentsByMonth);
   const deleteMonthStats = useMutation(api.mutations.deleteMonthStats);
 
-  const periodMonths = generateMonthRange(startMonth, endMonth);
-  const totalDaysInPeriod = periodMonths.reduce((acc, month) => {
-    const [y, m] = month.split("-").map(Number);
-    return acc + new Date(y, m, 0).getDate();
-  }, 0);
-
-  const daysInFirstMonth =
-    periodMonths.length > 0
-      ? (() => {
-          const [y, m] = periodMonths[0].split("-").map(Number);
-          return new Date(y, m, 0).getDate();
-        })()
-      : 31;
+  const [effectiveStart, effectiveEnd] =
+    startDate && endDate && startDate <= endDate
+      ? [startDate, endDate]
+      : startDate && endDate
+        ? [endDate, startDate]
+        : [PERIOD_START_DATE, PERIOD_END_DATE];
+  const periodDates = generateDateRange(effectiveStart, effectiveEnd);
 
   const handleStartSync = useCallback(async (): Promise<void> => {
     setSyncing(true);
     setSyncProgress(0);
-    setSyncCurrentDay(0);
+    setSyncCurrentDate("");
     setSyncResults(null);
     setSyncError(null);
+    syncCancelledRef.current = false;
+
+    try {
+      localStorage.setItem(
+        SYNC_STORAGE_KEY,
+        JSON.stringify({
+          startTime: Date.now(),
+          startDate: effectiveStart,
+          endDate: effectiveEnd,
+        })
+      );
+    } catch {
+      // Ignorar si localStorage no está disponible
+    }
 
     let totalInserted = 0;
     let totalDeleted = 0;
     const failedDays: string[] = [];
-    let processedDays = 0;
 
-    for (let monthIdx = 0; monthIdx < periodMonths.length; monthIdx++) {
-      const month = periodMonths[monthIdx];
-      const [y, m] = month.split("-").map(Number);
-      const daysInMonth = new Date(y, m, 0).getDate();
+    for (let i = 0; i < periodDates.length; i++) {
+      if (syncCancelledRef.current) break;
 
-      setSyncCurrentMonth(month);
-      setSyncCurrentMonthIndex(monthIdx + 1);
-      setSyncTotalDays(daysInMonth);
+      const dateStr = periodDates[i];
+      setSyncCurrentDate(dateStr);
+      setSyncCurrentIndex(i + 1);
+      setSyncTotalDates(periodDates.length);
 
-      for (let d = 1; d <= daysInMonth; d++) {
-        const dateStr = `${month}-${String(d).padStart(2, "0")}`;
-        setSyncCurrentDay(d);
-
-        try {
-          const res = await fetchAndIngest({ date: dateStr });
-          totalInserted += res.inserted ?? 0;
-          totalDeleted += res.deleted ?? 0;
-        } catch {
-          failedDays.push(dateStr);
-        }
-
-        processedDays += 1;
-        setSyncProgress((processedDays / totalDaysInPeriod) * 100);
+      try {
+        const res = await fetchAndIngest({ date: dateStr });
+        totalInserted += res.inserted ?? 0;
+        totalDeleted += res.deleted ?? 0;
+      } catch {
+        failedDays.push(dateStr);
       }
+
+      setSyncProgress(((i + 1) / periodDates.length) * 100);
     }
 
+    const cancelled = syncCancelledRef.current;
     setSyncResults({
       inserted: totalInserted,
       deleted: totalDeleted,
       ...(failedDays.length > 0 && { failedDays }),
     });
     setSyncError(
-      failedDays.length > 0
-        ? `Días con error (${failedDays.length}): ${failedDays.slice(0, 5).join(", ")}${failedDays.length > 5 ? "..." : ""}. Límite 600s/día. Reintenta esos días.`
-        : null
+      cancelled
+        ? "Sincronización detenida por el usuario."
+        : failedDays.length > 0
+          ? `Días con error (${failedDays.length}): ${failedDays.slice(0, 5).join(", ")}${failedDays.length > 5 ? "..." : ""}. Límite 600s/día. Reintenta esos días.`
+          : null
     );
     setSyncing(false);
-  }, [fetchAndIngest, periodMonths, totalDaysInPeriod]);
+
+    try {
+      localStorage.removeItem(SYNC_STORAGE_KEY);
+    } catch {
+      // Ignorar
+    }
+  }, [fetchAndIngest, periodDates, effectiveStart, effectiveEnd]);
+
+  const handleCancelSync = useCallback((): void => {
+    syncCancelledRef.current = true;
+  }, []);
 
   const handleDeleteAll = useCallback(async (): Promise<void> => {
     setDeleting(true);
@@ -167,6 +200,26 @@ export default function UploadPage(): React.ReactElement {
       setDeleting(false);
     }
   }, [deletePaymentsByMonth, deleteMonthStats]);
+
+  const handleDeleteMonth = useCallback(
+    async (month: string): Promise<void> => {
+      setDeleting(true);
+      try {
+        while (true) {
+          const res = await deletePaymentsByMonth({ month });
+          if (res.deleted === 0) break;
+        }
+        await deleteMonthStats({ month });
+        setDeleteMonthDialogOpen(false);
+        setSelectedMonth(null);
+      } catch (err) {
+        console.error(err);
+      } finally {
+        setDeleting(false);
+      }
+    },
+    [deletePaymentsByMonth, deleteMonthStats]
+  );
 
   const toggleMonth = (month: string): void => {
     setSelectedMonths((prev) => {
@@ -303,36 +356,34 @@ export default function UploadPage(): React.ReactElement {
               <label className="text-xs text-muted-foreground">
                 Período desde
               </label>
-              <select
-                value={startMonth}
-                onChange={(e) => setStartMonth(e.target.value)}
+              <input
+                type="date"
+                value={startDate}
+                onChange={(e) => setStartDate(e.target.value)}
+                min={PERIOD_START_DATE}
+                max={PERIOD_END_DATE}
                 className="bg-slate-800 border border-slate-600 rounded px-3 py-2 text-sm"
-              >
-                {ALL_MONTHS.map((m) => (
-                  <option key={m} value={m}>
-                    {m}
-                  </option>
-                ))}
-              </select>
+              />
             </div>
             <div className="flex flex-col gap-1">
               <label className="text-xs text-muted-foreground">hasta</label>
-              <select
-                value={endMonth}
-                onChange={(e) => setEndMonth(e.target.value)}
+              <input
+                type="date"
+                value={endDate}
+                onChange={(e) => setEndDate(e.target.value)}
+                min={PERIOD_START_DATE}
+                max={PERIOD_END_DATE}
                 className="bg-slate-800 border border-slate-600 rounded px-3 py-2 text-sm"
-              >
-                {ALL_MONTHS.map((m) => (
-                  <option key={m} value={m}>
-                    {m}
-                  </option>
-                ))}
-              </select>
+              />
             </div>
             <div className="flex flex-wrap gap-2">
               <Button
                 size="sm"
-                onClick={() => setSyncDialogOpen(true)}
+                onClick={() => {
+                  setSyncResults(null);
+                  setSyncError(null);
+                  setSyncDialogOpen(true);
+                }}
                 disabled={syncing}
                 className="gap-2 bg-indigo-600 hover:bg-indigo-700"
               >
@@ -355,7 +406,21 @@ export default function UploadPage(): React.ReactElement {
 
         {/* Registros Cargados - grilla de meses */}
         <section>
-          <h2 className="text-lg font-semibold mb-3">Registros cargados</h2>
+          <div className="flex flex-wrap items-center justify-between gap-3 mb-3">
+            <h2 className="text-lg font-semibold">Registros cargados</h2>
+            {selectedMonth && (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setDeleteMonthDialogOpen(true)}
+                disabled={syncing || deleting}
+                className="gap-2 bg-white/3 border-border/50 text-red-400 hover:text-red-300"
+              >
+                <Trash2 className="size-3.5" />
+                Borrar mes {selectedMonth}
+              </Button>
+            )}
+          </div>
           {allMonthsStatus ? (
             <IngestionStatus
               allMonthsStatus={allMonthsStatus}
@@ -687,19 +752,54 @@ export default function UploadPage(): React.ReactElement {
         open={syncDialogOpen}
         onOpenChange={setSyncDialogOpen}
         onStartSync={handleStartSync}
+        onCancelSync={handleCancelSync}
         syncing={syncing}
         progress={syncProgress}
-        currentDay={syncCurrentDay}
-        totalDays={syncing ? syncTotalDays : daysInFirstMonth}
+        currentDate={syncCurrentDate}
+        currentIndex={syncCurrentIndex}
+        totalDates={syncTotalDates || periodDates.length}
         results={syncResults}
         error={syncError}
-        month={startMonth}
-        startMonth={startMonth}
-        endMonth={endMonth}
-        currentMonth={syncCurrentMonth}
-        currentMonthIndex={syncCurrentMonthIndex}
-        totalMonths={periodMonths.length}
+        startDate={startDate}
+        endDate={endDate}
       />
+
+      <Dialog
+        open={deleteMonthDialogOpen}
+        onOpenChange={setDeleteMonthDialogOpen}
+      >
+        <DialogContent className="glass-card-elevated border-border/50">
+          <DialogHeader>
+            <DialogTitle>Borrar mes {selectedMonth}</DialogTitle>
+            <DialogDescription>
+              Se eliminarán todos los registros y estadísticas de {selectedMonth}.
+              Esta acción no se puede deshacer. Los datos se pueden volver a
+              sincronizar desde CloudWatch.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button
+              variant="destructive"
+              onClick={() =>
+                selectedMonth && handleDeleteMonth(selectedMonth)
+              }
+              disabled={deleting || !selectedMonth}
+              size="sm"
+            >
+              {deleting ? "Eliminando..." : "Eliminar mes"}
+            </Button>
+            <Button
+              variant="outline"
+              onClick={() => setDeleteMonthDialogOpen(false)}
+              disabled={deleting}
+              size="sm"
+              className="bg-white/3 border-border/50"
+            >
+              Cancelar
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <Dialog open={deleteDialogOpen} onOpenChange={setDeleteDialogOpen}>
         <DialogContent className="glass-card-elevated border-border/50">
