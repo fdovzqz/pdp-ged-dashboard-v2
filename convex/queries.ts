@@ -407,3 +407,61 @@ export const getIngestionStatus = query({
     };
   },
 });
+
+/** Query auxiliar: retorna una página de paymentRecords por mes. */
+export const getPaymentRecordsPageByMonth = query({
+  args: {
+    month: v.string(),
+    cursor: v.optional(v.string()),
+    numItems: v.optional(v.number()),
+  },
+  handler: async (ctx, { month, cursor, numItems = 5000 }) => {
+    const result = await ctx.db
+      .query("paymentRecords")
+      .withIndex("by_month", (q) => q.eq("importMonth", month))
+      .order("asc")
+      .paginate({ numItems, cursor: cursor ?? null });
+    return {
+      page: result.page.map((r) => r.referencia),
+      isDone: result.isDone,
+      continueCursor: result.continueCursor,
+    };
+  },
+});
+
+/**
+ * Verifica duplicados en un solo mes (por debajo del límite de lectura).
+ * Útil para verificar mes a mes desde el dashboard o scripts.
+ */
+export const findDuplicateReferenciasInMonth = query({
+  args: { month: v.string() },
+  handler: async (ctx, { month }) => {
+    const records = await ctx.db
+      .query("paymentRecords")
+      .withIndex("by_month", (q) => q.eq("importMonth", month))
+      .collect();
+
+    const countByRef = new Map<string, number>();
+    for (const rec of records) {
+      countByRef.set(rec.referencia, (countByRef.get(rec.referencia) ?? 0) + 1);
+    }
+
+    const duplicates: Array<{ referencia: string; count: number }> = [];
+    for (const [ref, count] of countByRef) {
+      if (count > 1) {
+        duplicates.push({ referencia: ref, count });
+      }
+    }
+
+    duplicates.sort((a, b) => b.count - a.count);
+
+    return {
+      month,
+      totalRecords: records.length,
+      uniqueReferencias: countByRef.size,
+      duplicateReferencias: duplicates.length,
+      totalDuplicateRecords: duplicates.reduce((s, d) => s + d.count, 0),
+      top: duplicates.slice(0, 20),
+    };
+  },
+});

@@ -517,3 +517,72 @@ export const recreateMonthStatsFromPaymentRecords = action({
   },
 });
 
+/** Genera lista de meses YYYY-MM entre start y end inclusive. */
+function generateMonthRange(start: string, end: string): string[] {
+  const months: string[] = [];
+  const [sy, sm] = start.split("-").map(Number);
+  const [ey, em] = end.split("-").map(Number);
+  let y = sy;
+  let m = sm;
+  while (y < ey || (y === ey && m <= em)) {
+    months.push(`${y}-${String(m).padStart(2, "0")}`);
+    m++;
+    if (m > 12) {
+      m = 1;
+      y++;
+    }
+  }
+  return months;
+}
+
+/**
+ * Verifica si hay referencias duplicadas en paymentRecords.
+ * Itera por mes para respetar límites de lectura.
+ */
+export const checkDuplicateReferencias = action({
+  args: { limit: v.optional(v.number()) },
+  handler: async (ctx, { limit: limitArg }) => {
+    const maxResults = limitArg ?? 50;
+    const months = generateMonthRange("2024-01", "2026-02");
+    const countByRef = new Map<string, number>();
+
+    for (const month of months) {
+      let cursor: string | undefined;
+      do {
+        const result = await ctx.runQuery(api.queries.getPaymentRecordsPageByMonth, {
+          month,
+          cursor,
+          numItems: 5000,
+        });
+        for (const ref of result.page) {
+          countByRef.set(ref, (countByRef.get(ref) ?? 0) + 1);
+        }
+        if (result.isDone) break;
+        cursor = result.continueCursor;
+      } while (cursor);
+    }
+
+    const duplicates: Array<{ referencia: string; count: number }> = [];
+    for (const [ref, count] of countByRef) {
+      if (count > 1) {
+        duplicates.push({ referencia: ref, count });
+      }
+    }
+
+    duplicates.sort((a, b) => b.count - a.count);
+
+    let totalRecords = 0;
+    for (const [, c] of countByRef) {
+      totalRecords += c;
+    }
+
+    return {
+      totalRecords,
+      uniqueReferencias: countByRef.size,
+      duplicateReferencias: duplicates.length,
+      totalDuplicateRecords: duplicates.reduce((s, d) => s + d.count, 0),
+      top: duplicates.slice(0, maxResults),
+    };
+  },
+});
+
