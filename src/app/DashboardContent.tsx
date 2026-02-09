@@ -49,6 +49,7 @@ export function DashboardContent(): React.ReactElement {
   const searchParams = useSearchParams();
   const [selectedHeatmapDay, setSelectedHeatmapDay] = useState<number | null>(null);
   const [calendarMode, setCalendarMode] = useState<CalendarMode>("events");
+  const [showYearComparison, setShowYearComparison] = useState(false);
 
   const monthKeyFromUrl = searchParams.get("month") ?? ANALYSIS_MONTH_STRING;
   const { year: selectedYear, month: selectedMonth } = parseMonthKey(monthKeyFromUrl);
@@ -328,6 +329,8 @@ export function DashboardContent(): React.ReactElement {
               : undefined
           }
           onDaySelect={(day) => handleDayClick(day)}
+          showComparison={showYearComparison}
+          onToggleComparison={setShowYearComparison}
         />
 
         <AccumulatedSection

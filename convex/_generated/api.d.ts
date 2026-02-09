@@ -9,6 +9,7 @@
  */
 
 import type * as actions from "../actions.js";
+import type * as annualQueries from "../annualQueries.js";
 import type * as januaryETL from "../januaryETL.js";
 import type * as januaryMutations from "../januaryMutations.js";
 import type * as januaryQueries from "../januaryQueries.js";
@@ -26,6 +27,7 @@ import type {
 
 declare const fullApi: ApiFromModules<{
   actions: typeof actions;
+  annualQueries: typeof annualQueries;
   januaryETL: typeof januaryETL;
   januaryMutations: typeof januaryMutations;
   januaryQueries: typeof januaryQueries;

@@ -4,12 +4,9 @@ import { useMemo, useState, memo } from "react";
 import { motion } from "framer-motion";
 import { Loader2 } from "lucide-react";
 import {
-  LineChart,
   Line,
-  AreaChart,
   Area,
   ComposedChart,
-  Bar,
   XAxis,
   YAxis,
   CartesianGrid,
@@ -22,6 +19,12 @@ import { CustomTooltip } from "./CustomTooltip";
 const COLOR_PAGOS = "#34d399";
 const COLOR_MONTO = "#f59e0b";
 
+const COMPARISON_COLORS: Record<string, string> = {
+  "2024": "#94a3b8",
+  "2025": "#818cf8",
+  "2026": "#34d399",
+};
+
 export interface HistoricalChartProps {
   data: Array<Record<string, number>> | undefined;
   dailyAmountData?: Array<{ day: number; totalAmount: number }>;
@@ -29,6 +32,10 @@ export interface HistoricalChartProps {
   dailyAverageAmount?: number;
   onDaySelect?: (day: number) => void;
   yearKey?: string;
+  /** When true, show comparison lines for other years */
+  showComparison?: boolean;
+  /** Callback to toggle comparison mode */
+  onToggleComparison?: (show: boolean) => void;
 }
 
 export const HistoricalChart = memo(({
@@ -38,28 +45,57 @@ export const HistoricalChart = memo(({
   dailyAverageAmount,
   onDaySelect,
   yearKey = "2026",
+  showComparison = false,
+  onToggleComparison,
 }: HistoricalChartProps): React.ReactElement => {
   const [mode, setMode] = useState<"daily" | "cumulative">("daily");
+
+  const allYears = useMemo(() => {
+    return ["2024", "2025", "2026"].filter((y) => y !== yearKey);
+  }, [yearKey]);
 
   const chartData = useMemo(() => {
     if (!data) return [];
     const amountByDay = new Map(
       (dailyAmountData ?? []).map((d) => [d.day, d.totalAmount])
     );
-    const mapped = data.map((row) => ({
-      day: row.day,
-      value: row[yearKey] ?? 0,
-      dailyAmount: amountByDay.get(row.day) ?? 0,
-    }));
+    const mapped = data.map((row) => {
+      const base: Record<string, number> = {
+        day: row.day,
+        value: row[yearKey] ?? 0,
+        dailyAmount: amountByDay.get(row.day) ?? 0,
+      };
+      if (showComparison) {
+        for (const y of allYears) {
+          base[y] = row[y] ?? 0;
+        }
+      }
+      return base;
+    });
     if (mode === "daily") return mapped;
     let accEvents = 0;
     let accAmount = 0;
+    const accComp: Record<string, number> = {};
+    if (showComparison) {
+      for (const y of allYears) accComp[y] = 0;
+    }
     return mapped.map((row) => {
       accEvents += row.value;
       accAmount += row.dailyAmount;
-      return { day: row.day, value: accEvents, dailyAmount: accAmount };
+      const result: Record<string, number> = {
+        day: row.day,
+        value: accEvents,
+        dailyAmount: accAmount,
+      };
+      if (showComparison) {
+        for (const y of allYears) {
+          accComp[y] += row[y] ?? 0;
+          result[y] = accComp[y];
+        }
+      }
+      return result;
     });
-  }, [data, dailyAmountData, mode, yearKey]);
+  }, [data, dailyAmountData, mode, yearKey, showComparison, allYears]);
 
   if (data === undefined) {
     return (
@@ -88,8 +124,44 @@ export const HistoricalChart = memo(({
       className="glass-card rounded-2xl p-6 min-w-0 overflow-hidden"
     >
       <div className="flex flex-wrap items-center justify-between gap-4 mb-6">
-        <h3 className="text-lg font-semibold font-display">Tendencia diaria</h3>
+        <div className="flex items-center gap-3">
+          <h3 className="text-lg font-semibold font-display">Tendencia diaria</h3>
+          {showComparison && (
+            <div className="flex items-center gap-2">
+              {allYears.map((y) => (
+                <span
+                  key={y}
+                  className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full border"
+                  style={{
+                    color: COMPARISON_COLORS[y],
+                    borderColor: `${COMPARISON_COLORS[y]}40`,
+                    backgroundColor: `${COMPARISON_COLORS[y]}10`,
+                  }}
+                >
+                  <span
+                    className="w-1.5 h-1.5 rounded-full"
+                    style={{ backgroundColor: COMPARISON_COLORS[y] }}
+                  />
+                  {y}
+                </span>
+              ))}
+            </div>
+          )}
+        </div>
         <div className="flex gap-2">
+          {onToggleComparison && (
+            <button
+              type="button"
+              onClick={() => onToggleComparison(!showComparison)}
+              className={`px-3 py-1.5 rounded-lg text-sm font-medium transition-all ${
+                showComparison
+                  ? "bg-indigo-500/20 text-indigo-400 border border-indigo-500/40"
+                  : "bg-slate-800/50 text-slate-400 hover:text-slate-300"
+              }`}
+            >
+              Comparar años
+            </button>
+          )}
           {(["daily", "cumulative"] as const).map((m) => (
             <button
               key={m}
@@ -129,7 +201,13 @@ export const HistoricalChart = memo(({
               <Tooltip
                 content={
                   <CustomTooltip
-                    labels={{ value: "Pagos", dailyAmount: "Monto (MXN)" }}
+                    labels={{
+                      value: `Pagos ${yearKey}`,
+                      dailyAmount: "Monto (MXN)",
+                      ...(showComparison
+                        ? Object.fromEntries(allYears.map((y) => [y, `Pagos ${y}`]))
+                        : {}),
+                    }}
                     format="mixed"
                   />
                 }
@@ -189,7 +267,22 @@ export const HistoricalChart = memo(({
                   },
                 }}
               />
-              {hasAmounts && (
+              {showComparison &&
+                allYears.map((y) => (
+                  <Line
+                    key={y}
+                    type="monotone"
+                    yAxisId="left"
+                    dataKey={y}
+                    stroke={COMPARISON_COLORS[y]}
+                    strokeWidth={1.5}
+                    strokeDasharray="4 3"
+                    strokeOpacity={0.7}
+                    dot={false}
+                    name={y}
+                  />
+                ))}
+              {hasAmounts && !showComparison && (
                 <Line
                   type="monotone"
                   yAxisId="right"
@@ -225,7 +318,13 @@ export const HistoricalChart = memo(({
                   <CustomTooltip
                     format="mixed"
                     formatMap={{ value: "number", dailyAmount: "currency" }}
-                    labels={{ value: "Acum. pagos", dailyAmount: "Acum. monto (MXN)" }}
+                    labels={{
+                      value: `Acum. ${yearKey}`,
+                      dailyAmount: "Acum. monto (MXN)",
+                      ...(showComparison
+                        ? Object.fromEntries(allYears.map((y) => [y, `Acum. ${y}`]))
+                        : {}),
+                    }}
                   />
                 }
               />
@@ -237,7 +336,22 @@ export const HistoricalChart = memo(({
                 fill="url(#grad2026)"
                 strokeWidth={2.5}
               />
-              {hasAmounts && (
+              {showComparison &&
+                allYears.map((y) => (
+                  <Line
+                    key={y}
+                    yAxisId="left"
+                    type="monotone"
+                    dataKey={y}
+                    stroke={COMPARISON_COLORS[y]}
+                    strokeWidth={1.5}
+                    strokeDasharray="4 3"
+                    strokeOpacity={0.7}
+                    dot={false}
+                    name={y}
+                  />
+                ))}
+              {hasAmounts && !showComparison && (
                 <Line
                   yAxisId="right"
                   type="monotone"

@@ -3,11 +3,12 @@
 import Image from "next/image";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { CalendarDays, Upload } from "lucide-react";
+import { CalendarDays, Upload, BarChart3 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 const NAV_ITEMS = [
   { href: "/", label: "Análisis Mensual", icon: CalendarDays },
+  { href: "/anual", label: "Análisis Anual", icon: BarChart3 },
   { href: "/upload", label: "Datos", icon: Upload },
 ];
 
