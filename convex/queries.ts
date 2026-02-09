@@ -429,6 +429,32 @@ export const getPaymentRecordsPageByMonth = query({
   },
 });
 
+/** Página con detalles (importDate, monto, logSource) para diagnóstico. */
+export const getPaymentRecordsPageWithDetails = query({
+  args: {
+    month: v.string(),
+    cursor: v.optional(v.string()),
+    numItems: v.optional(v.number()),
+  },
+  handler: async (ctx, { month, cursor, numItems = 5000 }) => {
+    const result = await ctx.db
+      .query("paymentRecords")
+      .withIndex("by_month", (q) => q.eq("importMonth", month))
+      .order("asc")
+      .paginate({ numItems, cursor: cursor ?? null });
+    return {
+      page: result.page.map((r) => ({
+        referencia: r.referencia,
+        importDate: r.importDate,
+        monto: r.monto,
+        logSource: r.logSource,
+      })),
+      isDone: result.isDone,
+      continueCursor: result.continueCursor,
+    };
+  },
+});
+
 /**
  * Verifica duplicados en un solo mes (por debajo del límite de lectura).
  * Útil para verificar mes a mes desde el dashboard o scripts.

@@ -586,3 +586,224 @@ export const checkDuplicateReferencias = action({
   },
 });
 
+/**
+ * Diagnóstico: compara datos de marzo 2025 días 1-6 entre paymentRecords,
+ * monthStats y dailyData.
+ */
+export const diagnoseMarch2025Days1to6 = action({
+  args: {},
+  handler: async (ctx) => {
+    const month = "2025-03";
+    const targetDates = ["2025-03-01", "2025-03-02", "2025-03-03", "2025-03-04", "2025-03-05", "2025-03-06"];
+
+    const byDateFromPayments: Record<string, { count: number; monto: number }> = {};
+    for (const d of targetDates) {
+      byDateFromPayments[d] = { count: 0, monto: 0 };
+    }
+
+    let cursor: string | undefined;
+    do {
+      const result = await ctx.runQuery(api.queries.getPaymentRecordsPageWithDetails, {
+        month,
+        cursor,
+        numItems: 5000,
+      });
+      for (const r of result.page) {
+        const dateStr = r.importDate ?? "";
+        if (dateStr && byDateFromPayments[dateStr]) {
+          byDateFromPayments[dateStr].count += 1;
+          byDateFromPayments[dateStr].monto += r.monto;
+        }
+      }
+      if (result.isDone) break;
+      cursor = result.continueCursor;
+    } while (cursor);
+
+    const monthStats = await ctx.runQuery(api.queries.getMonthStats, { month });
+    const dayEntriesFromMonthStats = monthStats?.dailyBreakdown?.days ?? [];
+    const byDateFromMonthStats: Record<string, { count: number; monto: number }> = {};
+    for (const d of targetDates) {
+      byDateFromMonthStats[d] = { count: 0, monto: 0 };
+    }
+    for (const entry of dayEntriesFromMonthStats) {
+      const dateStr = entry.date;
+      if (byDateFromMonthStats[dateStr]) {
+        byDateFromMonthStats[dateStr] = {
+          count: entry.count,
+          monto: entry.monto,
+        };
+      }
+    }
+
+    const dailyData = await ctx.runQuery(api.januaryQueries.getDailyDataForDays, {
+      year: 2025,
+      month: 3,
+      days: [1, 2, 3, 4, 5, 6],
+    }) as Array<{ day: number; events: number; totalAmount: number }>;
+    const byDateFromDailyData: Record<string, { count: number; monto: number }> = {};
+    for (const d of targetDates) {
+      byDateFromDailyData[d] = { count: 0, monto: 0 };
+    }
+    for (const row of dailyData) {
+      const dateStr = `${month}-${String(row.day).padStart(2, "0")}`;
+      if (byDateFromDailyData[dateStr]) {
+        byDateFromDailyData[dateStr] = {
+          count: row.events,
+          monto: row.totalAmount,
+        };
+      }
+    }
+
+    const comparison: Array<{
+      date: string;
+      paymentRecords: { count: number; monto: number };
+      monthStats: { count: number; monto: number };
+      dailyData: { count: number; monto: number };
+      countMatch: boolean;
+      montoMatch: boolean;
+      issues: string[];
+    }> = [];
+
+    for (const dateStr of targetDates) {
+      const pr = byDateFromPayments[dateStr];
+      const ms = byDateFromMonthStats[dateStr];
+      const dd = byDateFromDailyData[dateStr];
+      const issues: string[] = [];
+      if (pr.count !== ms.count) {
+        issues.push(`count: paymentRecords(${pr.count}) ≠ monthStats(${ms.count})`);
+      }
+      if (pr.count !== dd.count) {
+        issues.push(`count: paymentRecords(${pr.count}) ≠ dailyData(${dd.count})`);
+      }
+      if (ms.count !== dd.count) {
+        issues.push(`count: monthStats(${ms.count}) ≠ dailyData(${dd.count})`);
+      }
+      if (Math.abs(pr.monto - ms.monto) > 1) {
+        issues.push(`monto: paymentRecords(${pr.monto}) ≠ monthStats(${ms.monto})`);
+      }
+      if (Math.abs(pr.monto - dd.monto) > 1) {
+        issues.push(`monto: paymentRecords(${pr.monto}) ≠ dailyData(${dd.monto})`);
+      }
+      if (Math.abs(ms.monto - dd.monto) > 1) {
+        issues.push(`monto: monthStats(${ms.monto}) ≠ dailyData(${dd.monto})`);
+      }
+      comparison.push({
+        date: dateStr,
+        paymentRecords: pr,
+        monthStats: ms,
+        dailyData: dd,
+        countMatch: pr.count === ms.count && pr.count === dd.count,
+        montoMatch: Math.abs(pr.monto - ms.monto) <= 1 && Math.abs(pr.monto - dd.monto) <= 1,
+        issues,
+      });
+    }
+
+    return {
+      month,
+      comparison,
+      summary: {
+        totalPaymentRecords: Object.values(byDateFromPayments).reduce((s, d) => s + d.count, 0),
+        totalMonthStats: Object.values(byDateFromMonthStats).reduce((s, d) => s + d.count, 0),
+        totalDailyData: Object.values(byDateFromDailyData).reduce((s, d) => s + d.count, 0),
+        daysWithIssues: comparison.filter((c) => c.issues.length > 0).length,
+      },
+    };
+  },
+});
+
+/**
+ * Diagnóstico de todos los meses: compara totales entre paymentRecords,
+ * monthStats y dailyData. Detecta meses con datos inconsistentes.
+ */
+export const diagnoseAllMonths = action({
+  args: {},
+  handler: async (ctx) => {
+    const months = generateMonthRange("2024-01", "2026-02");
+    const results: Array<{
+      month: string;
+      paymentRecords: { count: number; monto: number };
+      monthStats: { count: number; monto: number } | null;
+      dailyData: { count: number; monto: number };
+      hasIssues: boolean;
+      issues: string[];
+    }> = [];
+
+    for (const month of months) {
+      const [year, monthNum] = month.split("-").map(Number);
+
+      let prCount = 0;
+      let prMonto = 0;
+      let cursor: string | undefined;
+      do {
+        const result = await ctx.runQuery(api.queries.getPaymentRecordsPageWithDetails, {
+          month,
+          cursor,
+          numItems: 5000,
+        });
+        for (const r of result.page) {
+          prCount += 1;
+          prMonto += r.monto;
+        }
+        if (result.isDone) break;
+        cursor = result.continueCursor;
+      } while (cursor);
+
+      const monthStats = await ctx.runQuery(api.queries.getMonthStats, { month });
+      const msCount = monthStats?.kpis?.totalPagos ?? 0;
+      const msMonto = monthStats?.kpis?.montoTotal ?? 0;
+
+      const ddResult = await ctx.runQuery(api.januaryQueries.getDailyDataMonthlyTotals, {
+        year,
+        month: monthNum,
+      });
+      const ddCount = ddResult?.events ?? 0;
+      const ddMonto = ddResult?.totalAmount ?? 0;
+
+      const issues: string[] = [];
+      if (prCount !== msCount && monthStats) {
+        issues.push(`count: paymentRecords(${prCount}) ≠ monthStats(${msCount})`);
+      }
+      if (prCount !== ddCount) {
+        issues.push(`count: paymentRecords(${prCount}) ≠ dailyData(${ddCount})`);
+      }
+      if (monthStats && msCount !== ddCount) {
+        issues.push(`count: monthStats(${msCount}) ≠ dailyData(${ddCount})`);
+      }
+      if (Math.abs(prMonto - msMonto) > 1 && monthStats) {
+        issues.push(`monto: paymentRecords(${prMonto}) ≠ monthStats(${msMonto})`);
+      }
+      if (Math.abs(prMonto - ddMonto) > 1) {
+        issues.push(`monto: paymentRecords(${prMonto}) ≠ dailyData(${ddMonto})`);
+      }
+      if (monthStats && Math.abs(msMonto - ddMonto) > 1) {
+        issues.push(`monto: monthStats(${msMonto}) ≠ dailyData(${ddMonto})`);
+      }
+
+      results.push({
+        month,
+        paymentRecords: { count: prCount, monto: prMonto },
+        monthStats: monthStats ? { count: msCount, monto: msMonto } : null,
+        dailyData: { count: ddCount, monto: ddMonto },
+        hasIssues: issues.length > 0,
+        issues,
+      });
+    }
+
+    const monthsWithIssues = results.filter((r) => r.hasIssues);
+
+    return {
+      totalMonths: months.length,
+      monthsWithIssues: monthsWithIssues.length,
+      monthsWithIssuesList: monthsWithIssues.map((r) => r.month),
+      details: monthsWithIssues.map((r) => ({
+        month: r.month,
+        paymentRecords: r.paymentRecords,
+        monthStats: r.monthStats,
+        dailyData: r.dailyData,
+        issues: r.issues,
+      })),
+      allResults: results,
+    };
+  },
+});
+

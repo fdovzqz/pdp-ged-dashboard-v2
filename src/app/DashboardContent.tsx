@@ -36,6 +36,7 @@ import {
   DashboardSkeleton,
   TicketEvolutionChart,
   PaymentChannelsSection,
+  MonthYearComparisonSection,
 } from "@/components/january";
 
 export type CalendarMode = "events" | "amount";
@@ -133,6 +134,9 @@ export function DashboardContent(): React.ReactElement {
   const paymentChannels = useQuery(api.januaryQueries.getPaymentChannelStats, {
     month: selectedMonth,
     year: selectedYear,
+  });
+  const growthMetrics = useQuery(api.januaryQueries.getGrowthMetrics, {
+    month: selectedMonth,
   });
   const dailyAmountData = useQuery(api.januaryQueries.getDailyAmountData, {
     year: selectedYear,
@@ -339,6 +343,16 @@ export function DashboardContent(): React.ReactElement {
           lastAvailableDay={lastAvailableDay}
           periods={periods}
           monthLabel={monthLabel.toLowerCase()}
+        />
+
+        <MonthYearComparisonSection
+          month={selectedMonth}
+          monthLabel={monthLabel.toLowerCase()}
+          lastAvailableDay={lastAvailableDay}
+          totalsByYear={totalsUpToDay}
+          amountsByYear={totalsAndAmountsUpToDay ?? {}}
+          dailyAverages={dailyAverages}
+          growthMetrics={growthMetrics ?? undefined}
         />
 
         <PaymentChannelsSection data={paymentChannels} />

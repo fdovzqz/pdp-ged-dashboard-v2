@@ -4,6 +4,52 @@ import { getMovementConfig, normalizeWithConfig } from "./movementCodes";
 
 const JANUARY_MONTH = 1;
 
+/** Totales mensuales de dailyData para un año/mes (diagnóstico). */
+export const getDailyDataMonthlyTotals = query({
+  args: { year: v.number(), month: v.number() },
+  handler: async (ctx, { year, month }) => {
+    const daily = await ctx.db
+      .query("dailyData")
+      .filter((q) =>
+        q.and(
+          q.eq(q.field("year"), year),
+          q.eq(q.field("month"), month)
+        )
+      )
+      .collect();
+    let events = 0;
+    let totalAmount = 0;
+    for (const d of daily) {
+      events += d.events;
+      totalAmount += d.totalAmount ?? 0;
+    }
+    return { events, totalAmount, daysWithData: daily.length };
+  },
+});
+
+/** dailyData para días específicos de un mes (diagnóstico). */
+export const getDailyDataForDays = query({
+  args: {
+    year: v.number(),
+    month: v.number(),
+    days: v.array(v.number()),
+  },
+  handler: async (ctx, { year, month, days }) => {
+    const daily = await ctx.db
+      .query("dailyData")
+      .filter((q) =>
+        q.and(
+          q.eq(q.field("year"), year),
+          q.eq(q.field("month"), month)
+        )
+      )
+      .collect();
+    return daily
+      .filter((d) => days.includes(d.day))
+      .sort((a, b) => a.day - b.day);
+  },
+});
+
 /** Meses con datos agregados disponibles (YYYY-MM, ordenados descendente). */
 export const getAvailableMonths = query({
   args: {},

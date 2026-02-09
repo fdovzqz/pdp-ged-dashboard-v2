@@ -8,7 +8,8 @@
     "start": "next start",
     "lint": "eslint",
     "convex:dev": "convex dev",
-    "convex:deploy": "convex deploy"
+    "convex:deploy": "convex deploy",
+    "regenerate-months": "tsx scripts/regenerate-inconsistent-months.ts"
   },
   "dependencies": {
     "@aws-sdk/client-cloudwatch-logs": "^3.983.0",
