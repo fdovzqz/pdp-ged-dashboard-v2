@@ -17,4 +17,5 @@ export { FinancialSummary } from "./FinancialSummary";
 export { DashboardSkeleton } from "./DashboardSkeleton";
 export { TicketEvolutionChart } from "./TicketEvolutionChart";
 export { PaymentChannelsSection } from "./PaymentChannelsSection";
+export { AnnualPaymentBySourceSection } from "./AnnualPaymentBySourceSection";
 export { MonthYearComparisonSection } from "./MonthYearComparisonSection";

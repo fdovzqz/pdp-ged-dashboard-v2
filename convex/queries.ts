@@ -625,6 +625,8 @@ export const getDatamappingRecordsByMonthPaginated = query({
 /** Tamaño de página CloudWatch (registros más pequeños). */
 const JAN_2026_CLOUDWATCH_PAGE_SIZE = 5000;
 
+const KNOWN_FUENTE_VALUES = ["EVO", "DEC", "CODI", "MIT"] as const;
+
 /**
  * Valores distintos de `fuente` en datamappingRecords con conteo.
  * Útil para conocer los códigos disponibles (EVO, DEC, etc.).
@@ -651,6 +653,44 @@ export const getDatamappingFuenteValues = query({
     for (const r of records) {
       const f = (r.fuente ?? "").trim() || "(vacío)";
       byFuente.set(f, (byFuente.get(f) ?? 0) + 1);
+    }
+    return Array.from(byFuente.entries())
+      .map(([value, count]) => ({ value, count }))
+      .sort((a, b) => b.count - a.count);
+  },
+});
+
+/**
+ * Devuelve valores de `fuente` que NO son los conocidos (EVO, DEC, CODI, MIT).
+ * Útil para detectar si hay otros códigos en los datos (ej. SPEI, vacío, o nuevos).
+ * Si se pasa `month` (ej. "2026-01"), filtra por ese mes; si no, toma hasta 10k registros.
+ */
+export const getDatamappingOtherFuenteValues = query({
+  args: {
+    month: v.optional(v.string()),
+    limit: v.optional(v.number()),
+  },
+  handler: async (ctx, { month, limit = 5000 }): Promise<{ value: string; count: number }[]> => {
+    const start = month ? `${month}-01` : undefined;
+    const end = month ? getNextMonthStart(month) : undefined;
+    const q = ctx.db.query("datamappingRecords");
+    const maxItems = Math.min(limit, 5000);
+    const records =
+      start && end
+        ? await q
+            .withIndex("by_updatedAt", (idx) =>
+              idx.gte("updatedAt", start).lt("updatedAt", end)
+            )
+            .take(maxItems)
+        : await q.take(maxItems);
+    const byFuente = new Map<string, number>();
+    for (const r of records) {
+      const raw = (r.fuente ?? "").trim();
+      const value = raw || "(vacío)";
+      const normalized = raw.toUpperCase();
+      if (!KNOWN_FUENTE_VALUES.includes(normalized as (typeof KNOWN_FUENTE_VALUES)[number])) {
+        byFuente.set(value, (byFuente.get(value) ?? 0) + 1);
+      }
     }
     return Array.from(byFuente.entries())
       .map(([value, count]) => ({ value, count }))

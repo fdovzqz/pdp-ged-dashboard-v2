@@ -72,7 +72,7 @@ export interface PaymentChannelStats {
   totalCount: number;
   totalMonto: number;
   dailyByChannel: DailyChannelEntry[];
-  /** Cards por fuente cuando viene de DataMapping (EVO, DEC, CODI, NO_DEFINIDO). */
+  /** Cards por fuente cuando viene de DataMapping (EVO, DEC, CODI, MIT, NO_DEFINIDO). */
   sources?: SourceData[];
 }
 
@@ -131,6 +131,7 @@ const FUENTE_COLORS: Record<string, string> = {
   EVO: "#34d399",
   DEC: "#60a5fa",
   CODI: "#a78bfa",
+  MIT: "#f59e0b",
   NO_DEFINIDO: "#94a3b8",
 };
 
@@ -271,9 +272,10 @@ export const PaymentChannelsSection = memo(
                       src.fuente === "EVO" && "bg-emerald-500/10 border-emerald-500/20",
                       src.fuente === "DEC" && "bg-blue-500/10 border-blue-500/20",
                       src.fuente === "CODI" && "bg-violet-500/10 border-violet-500/20",
+                      src.fuente === "MIT" && "bg-amber-500/10 border-amber-500/20",
                       src.fuente === "NO_DEFINIDO" && "bg-slate-500/10 border-slate-500/20"
                     )}
-                    style={!["EVO", "DEC", "CODI", "NO_DEFINIDO"].includes(src.fuente) ? { borderColor: `${color}40`, backgroundColor: `${color}15` } : undefined}
+                    style={!["EVO", "DEC", "CODI", "MIT", "NO_DEFINIDO"].includes(src.fuente) ? { borderColor: `${color}40`, backgroundColor: `${color}15` } : undefined}
                   >
                     <div className="flex items-center gap-3 mb-4">
                       <div

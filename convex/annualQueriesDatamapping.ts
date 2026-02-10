@@ -230,3 +230,103 @@ export const getAnnualCumulative = query({
     return result;
   },
 });
+
+/** Labels por código de fuente (mismo que mensual). */
+const FUENTE_LABELS: Record<string, string> = {
+  EVO: "Motor de Pagos - EVO",
+  DEC: "SEI - DEC",
+  CODI: "Motor de Pagos - CODI",
+  MIT: "Motor de Pagos - MIT",
+  NO_DEFINIDO: "SEI - No Definido",
+};
+
+const FUENTE_ORDER = ["EVO", "DEC", "CODI", "MIT", "NO_DEFINIDO"] as const;
+
+type SourceRow = {
+  fuente: string;
+  label: string;
+  count: number;
+  monto: number;
+  pctCount: number;
+  pctMonto: number;
+  ticketPromedio: number;
+};
+
+/** Pagos por tipo de fuente agregados por año (solo DataMapping). SPEI se agrupa con NO_DEFINIDO. */
+export const getAnnualPaymentBySource = query({
+  args: {},
+  handler: async (ctx): Promise<{
+    byYear: Record<string, SourceRow[]>;
+    totals: SourceRow[];
+  }> => {
+    const byYear: Record<string, SourceRow[]> = {
+      "2024": [],
+      "2025": [],
+      "2026": [],
+    };
+
+    for (const year of YEARS) {
+      const rows = await ctx.db
+        .query("datamappingDailyFuenteBreakdown")
+        .withIndex("by_year_month_day", (q) => q.eq("year", year))
+        .collect();
+
+      const byFuente = new Map<string, { count: number; monto: number }>();
+      for (const r of rows) {
+        const key = r.fuente === "SPEI" ? "NO_DEFINIDO" : r.fuente;
+        const cur = byFuente.get(key) ?? { count: 0, monto: 0 };
+        cur.count += r.count;
+        cur.monto += r.monto;
+        byFuente.set(key, cur);
+      }
+
+      const totalCount = [...byFuente.values()].reduce((s, v) => s + v.count, 0);
+      const totalMonto = [...byFuente.values()].reduce((s, v) => s + v.monto, 0);
+
+      const sources: SourceRow[] = FUENTE_ORDER.filter((f) => byFuente.has(f)).map(
+        (fuente) => {
+          const v = byFuente.get(fuente)!;
+          return {
+            fuente,
+            label: FUENTE_LABELS[fuente] ?? fuente,
+            count: v.count,
+            monto: v.monto,
+            pctCount: totalCount > 0 ? (v.count / totalCount) * 100 : 0,
+            pctMonto: totalMonto > 0 ? (v.monto / totalMonto) * 100 : 0,
+            ticketPromedio: v.count > 0 ? Math.round(v.monto / v.count) : 0,
+          };
+        }
+      );
+      byYear[String(year)] = sources;
+    }
+
+    const totalsByFuente = new Map<string, { count: number; monto: number }>();
+    for (const year of YEARS) {
+      for (const row of byYear[String(year)]) {
+        const cur = totalsByFuente.get(row.fuente) ?? { count: 0, monto: 0 };
+        cur.count += row.count;
+        cur.monto += row.monto;
+        totalsByFuente.set(row.fuente, cur);
+      }
+    }
+    const totalCount = [...totalsByFuente.values()].reduce((s, v) => s + v.count, 0);
+    const totalMonto = [...totalsByFuente.values()].reduce((s, v) => s + v.monto, 0);
+
+    const totals: SourceRow[] = FUENTE_ORDER.filter((f) => totalsByFuente.has(f)).map(
+      (fuente) => {
+        const v = totalsByFuente.get(fuente)!;
+        return {
+          fuente,
+          label: FUENTE_LABELS[fuente] ?? fuente,
+          count: v.count,
+          monto: v.monto,
+          pctCount: totalCount > 0 ? (v.count / totalCount) * 100 : 0,
+          pctMonto: totalMonto > 0 ? (v.monto / totalMonto) * 100 : 0,
+          ticketPromedio: v.count > 0 ? Math.round(v.monto / v.count) : 0,
+        };
+      }
+    );
+
+    return { byYear, totals };
+  },
+});

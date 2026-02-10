@@ -27,12 +27,16 @@ function isEvo(fuente: string | undefined): boolean {
   return f === "EVO";
 }
 
-/** Normaliza fuente a EVO | DEC | CODI | NO_DEFINIDO. */
-function normalizeFuente(fuente: string | undefined): "EVO" | "DEC" | "CODI" | "NO_DEFINIDO" {
+/** Normaliza fuente a EVO | DEC | CODI | MIT | NO_DEFINIDO. SPEI se agrupa con SEI - No Definido. */
+function normalizeFuente(
+  fuente: string | undefined
+): "EVO" | "DEC" | "CODI" | "MIT" | "NO_DEFINIDO" {
   const f = (fuente ?? "").toUpperCase().trim();
   if (f === "EVO") return "EVO";
   if (f === "DEC") return "DEC";
   if (f === "CODI") return "CODI";
+  if (f === "MIT") return "MIT";
+  if (f === "SPEI") return "NO_DEFINIDO";
   return "NO_DEFINIDO";
 }
 

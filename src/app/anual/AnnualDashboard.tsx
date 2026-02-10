@@ -29,7 +29,12 @@ import {
   Area,
   AreaChart,
 } from "recharts";
-import { KPICard, kpiGridVariants, CustomTooltip } from "@/components/january";
+import {
+  KPICard,
+  kpiGridVariants,
+  CustomTooltip,
+  AnnualPaymentBySourceSection,
+} from "@/components/january";
 import { MONTH_SHORT_NAMES, MONTH_NAMES } from "@/lib/constants";
 
 const YEAR_COLORS: Record<string, string> = {
@@ -69,6 +74,9 @@ export function AnnualDashboard(): React.ReactElement {
   const yoyGrowth = useQuery(annualApi.getYearOverYearGrowth);
   const extremes = useQuery(annualApi.getAnnualExtremes);
   const cumulativeData = useQuery(annualApi.getAnnualCumulative);
+  const annualPaymentBySource = useQuery(
+    api.annualQueriesDatamapping.getAnnualPaymentBySource
+  );
 
   const handleSourceChange = useCallback((source: DataSource) => {
     const url = new URL(window.location.href);
@@ -522,6 +530,11 @@ export function AnnualDashboard(): React.ReactElement {
             </ResponsiveContainer>
           </div>
         </motion.div>
+
+        {/* ── Pagos por tipo de fuente (solo DataMapping) ── */}
+        {dataSource === "datamapping" && (
+          <AnnualPaymentBySourceSection data={annualPaymentBySource} />
+        )}
 
         {/* ── Cumulative Charts ── */}
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">

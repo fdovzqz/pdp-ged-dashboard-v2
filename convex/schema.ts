@@ -212,7 +212,7 @@ export default defineSchema({
     count: v.number(),
   }).index("by_year_month_movimiento", ["year", "month", "movimiento"]),
 
-  /** Desglose por fuente (EVO, DEC, CODI, NO_DEFINIDO) por día. */
+  /** Desglose por fuente (EVO, DEC, CODI, MIT, NO_DEFINIDO) por día. */
   datamappingDailyFuenteBreakdown: defineTable({
     year: v.number(),
     month: v.number(),

@@ -606,6 +606,7 @@ const FUENTE_LABELS: Record<string, string> = {
   EVO: "Motor de Pagos - EVO",
   DEC: "SEI - DEC",
   CODI: "Motor de Pagos - CODI",
+  MIT: "Motor de Pagos - MIT",
   NO_DEFINIDO: "SEI - No Definido",
 };
 
@@ -647,7 +648,7 @@ export const getPaymentChannelStats = query({
       }
       const totalCount = Array.from(byFuente.values()).reduce((s, v) => s + v.count, 0);
       const totalMonto = Array.from(byFuente.values()).reduce((s, v) => s + v.monto, 0);
-      const order = ["EVO", "DEC", "CODI", "NO_DEFINIDO"] as const;
+      const order = ["EVO", "DEC", "CODI", "MIT", "NO_DEFINIDO"] as const;
       const sources = order
         .filter((f) => byFuente.has(f))
         .map((fuente) => {
