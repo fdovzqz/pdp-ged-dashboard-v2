@@ -16,10 +16,12 @@ import {
   PERIOD_END,
   generateMonthRange,
 } from "@/lib/constants";
+import type { DataSource } from "@/lib/types";
 
 export interface MonthYearSelectorProps {
   value: string;
   onChange: (monthKey: string) => void;
+  dataSource?: DataSource;
 }
 
 /** Convierte YYYY-MM a [year, month] numerico. */
@@ -31,8 +33,13 @@ function parseMonthKey(key: string): { year: number; month: number } {
 export const MonthYearSelector = ({
   value,
   onChange,
+  dataSource = "cloudwatch",
 }: MonthYearSelectorProps): React.ReactElement => {
-  const availableMonths = useQuery(api.januaryQueries.getAvailableMonths);
+  const availableMonthsQuery =
+    dataSource === "datamapping"
+      ? api.januaryQueriesDatamapping.getAvailableMonths
+      : api.januaryQueries.getAvailableMonths;
+  const availableMonths = useQuery(availableMonthsQuery);
 
   const options = useMemo(() => {
     const base =

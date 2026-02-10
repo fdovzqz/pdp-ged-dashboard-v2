@@ -56,12 +56,24 @@ interface DailyChannelEntry {
   totalMonto?: number;
 }
 
+export interface SourceData {
+  fuente: string;
+  label: string;
+  count: number;
+  monto: number;
+  pctCount: number;
+  pctMonto: number;
+  ticketPromedio: number;
+}
+
 export interface PaymentChannelStats {
   evo: ChannelData;
   ventanilla: VentanillaData;
   totalCount: number;
   totalMonto: number;
   dailyByChannel: DailyChannelEntry[];
+  /** Cards por fuente cuando viene de DataMapping (EVO, DEC, CODI, NO_DEFINIDO). */
+  sources?: SourceData[];
 }
 
 export interface PaymentChannelsSectionProps {
@@ -115,6 +127,13 @@ const VENTANILLA_COLOR = "#60a5fa";
 const V1_COLOR = "#a78bfa";
 const V2_COLOR = "#818cf8";
 
+const FUENTE_COLORS: Record<string, string> = {
+  EVO: "#34d399",
+  DEC: "#60a5fa",
+  CODI: "#a78bfa",
+  NO_DEFINIDO: "#94a3b8",
+};
+
 /* ──────── Component ──────── */
 export const PaymentChannelsSection = memo(
   ({ data }: PaymentChannelsSectionProps): React.ReactElement => {
@@ -123,6 +142,16 @@ export const PaymentChannelsSection = memo(
     /* Donut data: volumen (count) or monto */
     const pieData = useMemo(() => {
       if (!data) return [];
+      if (data.sources && data.sources.length > 0) {
+        return data.sources.map((s) => ({
+          name: s.label,
+          count: s.count,
+          monto: s.monto,
+          pct: viewMode === "volumen" ? s.pctCount : s.pctMonto,
+          value: viewMode === "volumen" ? s.count : s.monto,
+          color: FUENTE_COLORS[s.fuente] ?? VENTANILLA_COLOR,
+        }));
+      }
       const { evo, ventanilla } = data;
       return [
         {
@@ -218,130 +247,221 @@ export const PaymentChannelsSection = memo(
           </div>
         </div>
 
-        {/* ──── Top: Two channel cards + Donut ──── */}
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 mb-6">
-          {/* EVO Card */}
-          <motion.div
-            initial={{ opacity: 0, x: -20 }}
-            animate={{ opacity: 1, x: 0 }}
-            transition={{ delay: 0.3, duration: 0.5 }}
-            className="rounded-xl bg-emerald-500/10 border border-emerald-500/20 p-5"
-          >
-            <div className="flex items-center gap-3 mb-4">
-              <div className="flex items-center justify-center w-10 h-10 rounded-lg bg-emerald-500/20 border border-emerald-500/30">
-                <Globe className="w-5 h-5 text-emerald-400" />
-              </div>
-              <div>
-                <p className="text-sm font-semibold text-emerald-400">
-                  EVO · Motor de Pagos
+        {/* ──── Top: Cards por fuente (o EVO+Ventanilla) + Donut ──── */}
+        <div
+          className={cn(
+            "grid gap-4 mb-6",
+            data.sources && data.sources.length > 0
+              ? "grid-cols-2 md:grid-cols-3 lg:grid-cols-5"
+              : "grid-cols-1 lg:grid-cols-3"
+          )}
+        >
+          {data.sources && data.sources.length > 0 ? (
+            <>
+              {data.sources.map((src, i) => {
+                const color = FUENTE_COLORS[src.fuente] ?? VENTANILLA_COLOR;
+                return (
+                  <motion.div
+                    key={src.fuente}
+                    initial={{ opacity: 0, y: 10 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    transition={{ delay: 0.3 + i * 0.05, duration: 0.5 }}
+                    className={cn(
+                      "rounded-xl p-5 border",
+                      src.fuente === "EVO" && "bg-emerald-500/10 border-emerald-500/20",
+                      src.fuente === "DEC" && "bg-blue-500/10 border-blue-500/20",
+                      src.fuente === "CODI" && "bg-violet-500/10 border-violet-500/20",
+                      src.fuente === "NO_DEFINIDO" && "bg-slate-500/10 border-slate-500/20"
+                    )}
+                    style={!["EVO", "DEC", "CODI", "NO_DEFINIDO"].includes(src.fuente) ? { borderColor: `${color}40`, backgroundColor: `${color}15` } : undefined}
+                  >
+                    <div className="flex items-center gap-3 mb-4">
+                      <div
+                        className="flex items-center justify-center w-10 h-10 rounded-lg border"
+                        style={{
+                          backgroundColor: `${color}20`,
+                          borderColor: `${color}40`,
+                        }}
+                      >
+                        <span
+                          className="w-3 h-3 rounded-full"
+                          style={{ backgroundColor: color }}
+                        />
+                      </div>
+                      <div>
+                        <p
+                          className="text-sm font-semibold"
+                          style={{ color }}
+                        >
+                          {src.label}
+                        </p>
+                        <p className="text-[11px] text-slate-400">
+                          {formatNumber(src.count)} referencias
+                        </p>
+                      </div>
+                    </div>
+                    <p
+                      className="text-3xl font-bold tabular-nums"
+                      style={{ color: `${color}dd` }}
+                    >
+                      {formatNumber(src.count)}
+                    </p>
+                    <p className="text-xs text-muted-foreground mt-1">
+                      {src.pctCount.toFixed(1)}% del volumen total
+                    </p>
+                    <div
+                      className="mt-3 pt-3 space-y-1.5"
+                      style={{ borderTop: `1px solid ${color}30` }}
+                    >
+                      <div className="flex justify-between text-xs">
+                        <span className="text-muted-foreground">Recaudación</span>
+                        <span className="font-semibold tabular-nums" style={{ color: `${color}dd` }}>
+                          {formatCurrency(src.monto)}
+                        </span>
+                      </div>
+                      <div className="flex justify-between text-xs">
+                        <span className="text-muted-foreground">% del ingreso</span>
+                        <span className="font-semibold tabular-nums">
+                          {src.pctMonto.toFixed(1)}%
+                        </span>
+                      </div>
+                      <div className="flex justify-between text-xs">
+                        <span className="text-muted-foreground">Ticket promedio</span>
+                        <span className="font-semibold tabular-nums">
+                          {formatCurrency(src.ticketPromedio)}
+                        </span>
+                      </div>
+                    </div>
+                  </motion.div>
+                );
+              })}
+            </>
+          ) : (
+            <>
+              {/* EVO Card */}
+              <motion.div
+                initial={{ opacity: 0, x: -20 }}
+                animate={{ opacity: 1, x: 0 }}
+                transition={{ delay: 0.3, duration: 0.5 }}
+                className="rounded-xl bg-emerald-500/10 border border-emerald-500/20 p-5"
+              >
+                <div className="flex items-center gap-3 mb-4">
+                  <div className="flex items-center justify-center w-10 h-10 rounded-lg bg-emerald-500/20 border border-emerald-500/30">
+                    <Globe className="w-5 h-5 text-emerald-400" />
+                  </div>
+                  <div>
+                    <p className="text-sm font-semibold text-emerald-400">
+                      EVO · Motor de Pagos
+                    </p>
+                    <p className="text-[11px] text-slate-400">Pago por pago en línea</p>
+                  </div>
+                </div>
+                <p className="text-3xl font-bold tabular-nums text-emerald-300">
+                  {formatNumber(evo.count)}
                 </p>
-                <p className="text-[11px] text-slate-400">Pago por pago en línea</p>
-              </div>
-            </div>
-            <p className="text-3xl font-bold tabular-nums text-emerald-300">
-              {formatNumber(evo.count)}
-            </p>
-            <p className="text-xs text-muted-foreground mt-1">
-              {evo.pctCount.toFixed(1)}% del volumen total
-            </p>
-            <div className="mt-3 pt-3 border-t border-emerald-500/20 space-y-1.5">
-              <div className="flex justify-between text-xs">
-                <span className="text-muted-foreground">Recaudación</span>
-                <span className="font-semibold tabular-nums text-emerald-300">
-                  {formatCurrency(evo.monto)}
-                </span>
-              </div>
-              <div className="flex justify-between text-xs">
-                <span className="text-muted-foreground">% del ingreso</span>
-                <span className="font-semibold tabular-nums">
-                  {evo.pctMonto.toFixed(1)}%
-                </span>
-              </div>
-              <div className="flex justify-between text-xs">
-                <span className="text-muted-foreground">Ticket promedio</span>
-                <span className="font-semibold tabular-nums">
-                  {formatCurrency(evo.ticketPromedio)}
-                </span>
-              </div>
-            </div>
-          </motion.div>
+                <p className="text-xs text-muted-foreground mt-1">
+                  {evo.pctCount.toFixed(1)}% del volumen total
+                </p>
+                <div className="mt-3 pt-3 border-t border-emerald-500/20 space-y-1.5">
+                  <div className="flex justify-between text-xs">
+                    <span className="text-muted-foreground">Recaudación</span>
+                    <span className="font-semibold tabular-nums text-emerald-300">
+                      {formatCurrency(evo.monto)}
+                    </span>
+                  </div>
+                  <div className="flex justify-between text-xs">
+                    <span className="text-muted-foreground">% del ingreso</span>
+                    <span className="font-semibold tabular-nums">
+                      {evo.pctMonto.toFixed(1)}%
+                    </span>
+                  </div>
+                  <div className="flex justify-between text-xs">
+                    <span className="text-muted-foreground">Ticket promedio</span>
+                    <span className="font-semibold tabular-nums">
+                      {formatCurrency(evo.ticketPromedio)}
+                    </span>
+                  </div>
+                </div>
+              </motion.div>
 
-          {/* Ventanilla Card */}
-          <motion.div
-            initial={{ opacity: 0, x: 20 }}
-            animate={{ opacity: 1, x: 0 }}
-            transition={{ delay: 0.35, duration: 0.5 }}
-            className="rounded-xl bg-blue-500/10 border border-blue-500/20 p-5"
-          >
-            <div className="flex items-center gap-3 mb-4">
-              <div className="flex items-center justify-center w-10 h-10 rounded-lg bg-blue-500/20 border border-blue-500/30">
-                <Building2 className="w-5 h-5 text-blue-400" />
-              </div>
-              <div>
-                <p className="text-sm font-semibold text-blue-400">
-                  Transferencias + Presencial con Edo. de Cuenta del Portal
-                </p>
-                <p className="text-[11px] text-slate-400">
-                  Bancos, cajas y transferencias
-                </p>
-              </div>
-            </div>
-            <p className="text-3xl font-bold tabular-nums text-blue-300">
-              {formatNumber(ventanilla.count)}
-            </p>
-            <p className="text-xs text-muted-foreground mt-1">
-              {ventanilla.pctCount.toFixed(1)}% del volumen total
-            </p>
-            <div className="mt-3 pt-3 border-t border-blue-500/20 space-y-1.5">
-              <div className="flex justify-between text-xs">
-                <span className="text-muted-foreground">Recaudación</span>
-                <span className="font-semibold tabular-nums text-blue-300">
-                  {formatCurrency(ventanilla.monto)}
-                </span>
-              </div>
-              <div className="flex justify-between text-xs">
-                <span className="text-muted-foreground">% del ingreso</span>
-                <span className="font-semibold tabular-nums">
-                  {ventanilla.pctMonto.toFixed(1)}%
-                </span>
-              </div>
-              <div className="flex justify-between text-xs">
-                <span className="text-muted-foreground">Ticket promedio</span>
-                <span className="font-semibold tabular-nums">
-                  {formatCurrency(ventanilla.ticketPromedio)}
-                </span>
-              </div>
-              {/* V1/V2 sub-breakdown */}
-              <div className="mt-2 pt-2 border-t border-blue-500/15 space-y-1">
-                <div className="flex justify-between text-[11px]">
-                  <span className="text-slate-500 flex items-center gap-1.5">
-                    <span
-                      className="inline-block w-2 h-2 rounded-full"
-                      style={{ backgroundColor: V1_COLOR }}
-                    />
-                    V1
-                  </span>
-                  <span className="tabular-nums text-slate-400">
-                    {formatNumber(ventanilla.v1Count)} pagos ·{" "}
-                    {formatCurrency(ventanilla.v1Monto)}
-                  </span>
+              {/* Ventanilla Card */}
+              <motion.div
+                initial={{ opacity: 0, x: 20 }}
+                animate={{ opacity: 1, x: 0 }}
+                transition={{ delay: 0.35, duration: 0.5 }}
+                className="rounded-xl bg-blue-500/10 border border-blue-500/20 p-5"
+              >
+                <div className="flex items-center gap-3 mb-4">
+                  <div className="flex items-center justify-center w-10 h-10 rounded-lg bg-blue-500/20 border border-blue-500/30">
+                    <Building2 className="w-5 h-5 text-blue-400" />
+                  </div>
+                  <div>
+                    <p className="text-sm font-semibold text-blue-400">
+                      Transferencias + Presencial con Edo. de Cuenta del Portal
+                    </p>
+                    <p className="text-[11px] text-slate-400">
+                      Bancos, cajas y transferencias
+                    </p>
+                  </div>
                 </div>
-                <div className="flex justify-between text-[11px]">
-                  <span className="text-slate-500 flex items-center gap-1.5">
-                    <span
-                      className="inline-block w-2 h-2 rounded-full"
-                      style={{ backgroundColor: V2_COLOR }}
-                    />
-                    V2
-                  </span>
-                  <span className="tabular-nums text-slate-400">
-                    {formatNumber(ventanilla.v2Count)} pagos ·{" "}
-                    {formatCurrency(ventanilla.v2Monto)}
-                  </span>
+                <p className="text-3xl font-bold tabular-nums text-blue-300">
+                  {formatNumber(ventanilla.count)}
+                </p>
+                <p className="text-xs text-muted-foreground mt-1">
+                  {ventanilla.pctCount.toFixed(1)}% del volumen total
+                </p>
+                <div className="mt-3 pt-3 border-t border-blue-500/20 space-y-1.5">
+                  <div className="flex justify-between text-xs">
+                    <span className="text-muted-foreground">Recaudación</span>
+                    <span className="font-semibold tabular-nums text-blue-300">
+                      {formatCurrency(ventanilla.monto)}
+                    </span>
+                  </div>
+                  <div className="flex justify-between text-xs">
+                    <span className="text-muted-foreground">% del ingreso</span>
+                    <span className="font-semibold tabular-nums">
+                      {ventanilla.pctMonto.toFixed(1)}%
+                    </span>
+                  </div>
+                  <div className="flex justify-between text-xs">
+                    <span className="text-muted-foreground">Ticket promedio</span>
+                    <span className="font-semibold tabular-nums">
+                      {formatCurrency(ventanilla.ticketPromedio)}
+                    </span>
+                  </div>
+                  {/* V1/V2 sub-breakdown */}
+                  <div className="mt-2 pt-2 border-t border-blue-500/15 space-y-1">
+                    <div className="flex justify-between text-[11px]">
+                      <span className="text-slate-500 flex items-center gap-1.5">
+                        <span
+                          className="inline-block w-2 h-2 rounded-full"
+                          style={{ backgroundColor: V1_COLOR }}
+                        />
+                        V1
+                      </span>
+                      <span className="tabular-nums text-slate-400">
+                        {formatNumber(ventanilla.v1Count)} pagos ·{" "}
+                        {formatCurrency(ventanilla.v1Monto)}
+                      </span>
+                    </div>
+                    <div className="flex justify-between text-[11px]">
+                      <span className="text-slate-500 flex items-center gap-1.5">
+                        <span
+                          className="inline-block w-2 h-2 rounded-full"
+                          style={{ backgroundColor: V2_COLOR }}
+                        />
+                        V2
+                      </span>
+                      <span className="tabular-nums text-slate-400">
+                        {formatNumber(ventanilla.v2Count)} pagos ·{" "}
+                        {formatCurrency(ventanilla.v2Monto)}
+                      </span>
+                    </div>
+                  </div>
                 </div>
-              </div>
-            </div>
-          </motion.div>
+              </motion.div>
+            </>
+          )}
 
           {/* Donut Chart */}
           <motion.div
@@ -389,27 +509,19 @@ export const PaymentChannelsSection = memo(
               </div>
             </div>
             {/* Legend */}
-            <div className="flex flex-col gap-1.5 mt-3 w-full">
-              <div className="flex items-center gap-2 text-xs">
-                <span
-                  className="w-3 h-3 rounded-sm shrink-0"
-                  style={{ backgroundColor: EVO_COLOR }}
-                />
-                <span className="text-slate-300 flex-1">EVO</span>
-                <span className="tabular-nums font-medium">
-                  {(viewMode === "volumen" ? evo.pctCount : evo.pctMonto).toFixed(1)}%
-                </span>
-              </div>
-              <div className="flex items-center gap-2 text-xs">
-                <span
-                  className="w-3 h-3 rounded-sm shrink-0"
-                  style={{ backgroundColor: VENTANILLA_COLOR }}
-                />
-                <span className="text-slate-300 flex-1">Transferencias + Presencial</span>
-                <span className="tabular-nums font-medium">
-                  {(viewMode === "volumen" ? ventanilla.pctCount : ventanilla.pctMonto).toFixed(1)}%
-                </span>
-              </div>
+            <div className="flex flex-col gap-1.5 mt-3 w-full max-h-32 overflow-y-auto">
+              {pieData.map((entry, i) => (
+                <div key={entry.name} className="flex items-center gap-2 text-xs">
+                  <span
+                    className="w-3 h-3 rounded-sm shrink-0"
+                    style={{ backgroundColor: entry.color }}
+                  />
+                  <span className="text-slate-300 flex-1 truncate">{entry.name}</span>
+                  <span className="tabular-nums font-medium shrink-0">
+                    {entry.pct.toFixed(1)}%
+                  </span>
+                </div>
+              ))}
             </div>
           </motion.div>
         </div>
@@ -422,72 +534,46 @@ export const PaymentChannelsSection = memo(
               Comparativa por {viewMode === "volumen" ? "volumen" : "monto"}
             </p>
             <div className="space-y-4">
-              {/* EVO bar */}
-              <div>
-                <div className="flex items-center justify-between mb-1.5">
-                  <span className="text-sm font-medium text-emerald-400 flex items-center gap-2">
-                    <Globe className="w-3.5 h-3.5" />
-                    EVO · Línea
-                  </span>
-                  <span className="text-sm font-bold tabular-nums">
-                    {viewMode === "volumen"
-                      ? formatNumber(evo.count)
-                      : formatCurrency(evo.monto)}
-                  </span>
-                </div>
-                <div className="h-6 bg-slate-800/50 rounded-full overflow-hidden">
-                  <motion.div
-                    key={viewMode}
-                    initial={{ width: 0 }}
-                    animate={{
-                      width:
-                        viewMode === "volumen"
-                          ? `${totalCount > 0 ? (evo.count / totalCount) * 100 : 0}%`
-                          : `${totalMonto > 0 ? (evo.monto / totalMonto) * 100 : 0}%`,
-                    }}
-                    transition={{ duration: 0.5, ease: "easeOut" }}
-                    className="h-full rounded-full flex items-center justify-end pr-2"
-                    style={{ backgroundColor: `${EVO_COLOR}70` }}
-                  >
-                    <span className="text-[10px] font-bold text-white whitespace-nowrap">
-                      {(viewMode === "volumen" ? evo.pctCount : evo.pctMonto).toFixed(1)}%
+              {pieData.map((entry) => (
+                <div key={entry.name}>
+                  <div className="flex items-center justify-between mb-1.5">
+                    <span
+                      className="text-sm font-medium flex items-center gap-2"
+                      style={{ color: entry.color }}
+                    >
+                      <span
+                        className="w-2.5 h-2.5 rounded-sm shrink-0"
+                        style={{ backgroundColor: entry.color }}
+                      />
+                      {entry.name}
                     </span>
-                  </motion.div>
-                </div>
-              </div>
-              {/* Ventanilla bar */}
-              <div>
-                <div className="flex items-center justify-between mb-1.5">
-                  <span className="text-sm font-medium text-blue-400 flex items-center gap-2">
-                    <Building2 className="w-3.5 h-3.5" />
-                    Transferencias + Presencial
-                  </span>
-                  <span className="text-sm font-bold tabular-nums">
-                    {viewMode === "volumen"
-                      ? formatNumber(ventanilla.count)
-                      : formatCurrency(ventanilla.monto)}
-                  </span>
-                </div>
-                <div className="h-6 bg-slate-800/50 rounded-full overflow-hidden">
-                  <motion.div
-                    key={viewMode}
-                    initial={{ width: 0 }}
-                    animate={{
-                      width:
-                        viewMode === "volumen"
-                          ? `${totalCount > 0 ? (ventanilla.count / totalCount) * 100 : 0}%`
-                          : `${totalMonto > 0 ? (ventanilla.monto / totalMonto) * 100 : 0}%`,
-                    }}
-                    transition={{ duration: 0.5, ease: "easeOut" }}
-                    className="h-full rounded-full flex items-center justify-end pr-2"
-                    style={{ backgroundColor: `${VENTANILLA_COLOR}70` }}
-                  >
-                    <span className="text-[10px] font-bold text-white whitespace-nowrap">
-                      {(viewMode === "volumen" ? ventanilla.pctCount : ventanilla.pctMonto).toFixed(1)}%
+                    <span className="text-sm font-bold tabular-nums">
+                      {viewMode === "volumen"
+                        ? formatNumber(entry.count)
+                        : formatCurrency(entry.monto)}
                     </span>
-                  </motion.div>
+                  </div>
+                  <div className="h-6 bg-slate-800/50 rounded-full overflow-hidden">
+                    <motion.div
+                      key={viewMode}
+                      initial={{ width: 0 }}
+                      animate={{
+                        width:
+                          viewMode === "volumen"
+                            ? `${totalCount > 0 ? (entry.count / totalCount) * 100 : 0}%`
+                            : `${totalMonto > 0 ? (entry.monto / totalMonto) * 100 : 0}%`,
+                      }}
+                      transition={{ duration: 0.5, ease: "easeOut" }}
+                      className="h-full rounded-full flex items-center justify-end pr-2"
+                      style={{ backgroundColor: `${entry.color}70` }}
+                    >
+                      <span className="text-[10px] font-bold text-white whitespace-nowrap">
+                        {entry.pct.toFixed(1)}%
+                      </span>
+                    </motion.div>
+                  </div>
                 </div>
-              </div>
+              ))}
             </div>
             {/* Total bar */}
             <div className="mt-4 pt-3 border-t border-slate-700/30 flex items-center justify-between">

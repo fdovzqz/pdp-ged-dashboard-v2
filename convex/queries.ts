@@ -446,6 +446,7 @@ export const getPaymentRecordsPageWithDetails = query({
     return {
       page: result.page.map((r) => ({
         referencia: r.referencia,
+        timestamp: r.timestamp,
         importDate: r.importDate,
         importMonth: r.importMonth,
         monto: r.monto,
@@ -574,8 +575,88 @@ const JAN_2026_END = "2026-02-01T06:00:00.000Z";
 /** Tamaño de página para no exceder 16MB por lectura (datamapping tiene rawJson grande). */
 const JAN_2026_DATAMAPPING_PAGE_SIZE = 500;
 
+/** Obtiene el primer día del mes siguiente (YYYY-MM). */
+function getNextMonthStart(month: string): string {
+  const [y, m] = month.split("-").map(Number);
+  if (!y || !m) return `${month}-02`;
+  const next = new Date(y, m, 1); // m is 1-based, Date uses 0-based
+  const ny = next.getFullYear();
+  const nm = String(next.getMonth() + 1).padStart(2, "0");
+  return `${ny}-${nm}-01`;
+}
+
+/**
+ * Página de datamappingRecords filtrada por mes (updatedAt en rango).
+ * Usado por buildDatamappingAggregates para ETL.
+ */
+export const getDatamappingRecordsByMonthPaginated = query({
+  args: {
+    month: v.string(),
+    paginationOpts: paginationOptsValidator,
+  },
+  handler: async (ctx, { month, paginationOpts }) => {
+    const start = `${month}-01`;
+    const end = getNextMonthStart(month);
+    const safeOpts = {
+      ...paginationOpts,
+      numItems: Math.min(paginationOpts.numItems, 1000),
+    };
+    const result = await ctx.db
+      .query("datamappingRecords")
+      .withIndex("by_updatedAt", (q) =>
+        q.gte("updatedAt", start).lt("updatedAt", end)
+      )
+      .order("asc")
+      .paginate(safeOpts);
+    return {
+      page: result.page.map((r) => ({
+        referencia: r.referencia,
+        monto: r.monto,
+        updatedAt: r.updatedAt,
+        tipoMovimiento: r.tipoMovimiento,
+        fuente: r.fuente,
+      })),
+      isDone: result.isDone,
+      continueCursor: result.continueCursor,
+    };
+  },
+});
+
 /** Tamaño de página CloudWatch (registros más pequeños). */
 const JAN_2026_CLOUDWATCH_PAGE_SIZE = 5000;
+
+/**
+ * Valores distintos de `fuente` en datamappingRecords con conteo.
+ * Útil para conocer los códigos disponibles (EVO, DEC, etc.).
+ * Si se pasa `month` (ej. "2026-01"), filtra por ese mes; si no, toma hasta 10k.
+ */
+export const getDatamappingFuenteValues = query({
+  args: {
+    month: v.optional(v.string()),
+    limit: v.optional(v.number()),
+  },
+  handler: async (ctx, { month, limit = 10000 }) => {
+    const start = month ? `${month}-01` : undefined;
+    const end = month ? getNextMonthStart(month) : undefined;
+    const q = ctx.db.query("datamappingRecords");
+    // Con enero: requiere action getDatamappingFuenteCountsByMonth (demasiados datos para una sola query).
+    const records = start && end
+      ? await q
+          .withIndex("by_updatedAt", (idx) =>
+            idx.gte("updatedAt", start).lt("updatedAt", end)
+          )
+          .collect()
+      : await q.take(Math.min(limit, 10000));
+    const byFuente = new Map<string, number>();
+    for (const r of records) {
+      const f = (r.fuente ?? "").trim() || "(vacío)";
+      byFuente.set(f, (byFuente.get(f) ?? 0) + 1);
+    }
+    return Array.from(byFuente.entries())
+      .map(([value, count]) => ({ value, count }))
+      .sort((a, b) => b.count - a.count);
+  },
+});
 
 /**
  * Página de datamappingRecords (tabla Convex, origen DynamoDB) para enero 2026.
@@ -730,7 +811,7 @@ export const getReconciliationSummaryJanuary2026 = query({
   },
 });
 
-/** Para enriquecer filas "Solo en Datamapping": devuelve importMonth de paymentRecords por referencia (máx 300 refs). */
+/** Para enriquecer filas "Solo en Datamapping": devuelve mes (YYYY-MM) en hora México de paymentRecords por referencia (máx 300 refs). */
 const MAX_REFERENCIAS_LOOKUP = 300;
 
 export const getPaymentRecordsMonthsForReferencias = query({
@@ -744,7 +825,12 @@ export const getPaymentRecordsMonthsForReferencias = query({
         .query("paymentRecords")
         .withIndex("by_referencia", (q) => q.eq("referencia", ref))
         .first();
-      if (rec?.importMonth) out[ref] = rec.importMonth;
+      if (!rec) continue;
+      const month =
+        rec.timestamp && /^\d{4}/.test(rec.timestamp)
+          ? timestampToMexicoMonth(rec.timestamp)
+          : (rec.importMonth ?? "").substring(0, 7);
+      if (month) out[ref] = month;
     }
     return out;
   },

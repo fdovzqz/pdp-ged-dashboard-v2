@@ -1,8 +1,10 @@
 "use client";
 
-import { useMemo } from "react";
+import { useMemo, useCallback } from "react";
+import { useSearchParams } from "next/navigation";
 import { useQuery } from "convex/react";
 import { api } from "convex/_generated/api";
+import type { DataSource } from "@/lib/types";
 import { motion } from "framer-motion";
 import {
   CreditCard,
@@ -53,11 +55,27 @@ const formatCompact = (n: number): string => {
 };
 
 export function AnnualDashboard(): React.ReactElement {
-  const monthlyBreakdown = useQuery(api.annualQueries.getMonthlyBreakdown);
-  const annualKPIs = useQuery(api.annualQueries.getAnnualKPIs);
-  const yoyGrowth = useQuery(api.annualQueries.getYearOverYearGrowth);
-  const extremes = useQuery(api.annualQueries.getAnnualExtremes);
-  const cumulativeData = useQuery(api.annualQueries.getAnnualCumulative);
+  const searchParams = useSearchParams();
+  const dataSource: DataSource =
+    searchParams.get("source") === "datamapping" ? "datamapping" : "cloudwatch";
+
+  const annualApi =
+    dataSource === "datamapping"
+      ? api.annualQueriesDatamapping
+      : api.annualQueries;
+
+  const monthlyBreakdown = useQuery(annualApi.getMonthlyBreakdown);
+  const annualKPIs = useQuery(annualApi.getAnnualKPIs);
+  const yoyGrowth = useQuery(annualApi.getYearOverYearGrowth);
+  const extremes = useQuery(annualApi.getAnnualExtremes);
+  const cumulativeData = useQuery(annualApi.getAnnualCumulative);
+
+  const handleSourceChange = useCallback((source: DataSource) => {
+    const url = new URL(window.location.href);
+    url.searchParams.set("source", source);
+    window.history.replaceState({}, "", url.toString());
+    window.location.href = url.toString();
+  }, []);
 
   const chartData = useMemo(() => {
     if (!monthlyBreakdown) return [];
@@ -155,6 +173,30 @@ export function AnnualDashboard(): React.ReactElement {
                 Datos disponibles: Ene–Dic 2024, Ene–Dic 2025, Ene–Feb 2026.
               </p>
               <div className="flex flex-wrap items-center gap-3 mt-3">
+                <div className="flex rounded-lg border border-slate-700/50 overflow-hidden bg-slate-800/40">
+                  <button
+                    type="button"
+                    onClick={() => handleSourceChange("cloudwatch")}
+                    className={`px-3 py-1.5 text-xs font-medium transition-colors ${
+                      dataSource === "cloudwatch"
+                        ? "bg-emerald-500/30 text-emerald-400"
+                        : "text-slate-400 hover:text-slate-200"
+                    }`}
+                  >
+                    CloudWatch
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleSourceChange("datamapping")}
+                    className={`px-3 py-1.5 text-xs font-medium transition-colors ${
+                      dataSource === "datamapping"
+                        ? "bg-amber-500/30 text-amber-400"
+                        : "text-slate-400 hover:text-slate-200"
+                    }`}
+                  >
+                    DataMapping
+                  </button>
+                </div>
                 {(["2024", "2025", "2026"] as const).map((y) => (
                   <span
                     key={y}

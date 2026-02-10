@@ -160,6 +160,79 @@ export default defineSchema({
     count: v.number(),
   }).index("by_year_month_movimiento", ["year", "month", "movimiento"]),
 
+  /** ─── Tablas agregadas DataMapping (origen DynamoDB) ─── */
+
+  rawHourlyDataDatamapping: defineTable({
+    year: v.number(),
+    month: v.number(),
+    day: v.number(),
+    hour: v.number(),
+    events: v.number(),
+    totalAmount: v.number(),
+  }).index("by_year_month_day_hour", ["year", "month", "day", "hour"]),
+
+  dailyDataDatamapping: defineTable({
+    year: v.number(),
+    month: v.number(),
+    day: v.number(),
+    events: v.number(),
+    totalAmount: v.number(),
+    transactionCount: v.number(),
+    isComplete: v.boolean(),
+  }).index("by_year_month_day", ["year", "month", "day"]),
+
+  monthlyDataDatamapping: defineTable({
+    year: v.number(),
+    month: v.number(),
+    events: v.number(),
+    totalAmount: v.number(),
+  }).index("by_year_month", ["year", "month"]),
+
+  hourlyDistributionDatamapping: defineTable({
+    year: v.number(),
+    month: v.number(),
+    dayType: v.string(),
+    hour: v.number(),
+    events: v.number(),
+  }).index("by_year_month_type_hour", ["year", "month", "dayType", "hour"]),
+
+  dailyAmountDataDatamapping: defineTable({
+    year: v.number(),
+    month: v.number(),
+    day: v.number(),
+    totalAmount: v.number(),
+    transactionCount: v.number(),
+  }).index("by_year_month_day", ["year", "month", "day"]),
+
+  amountByMovementDatamapping: defineTable({
+    year: v.number(),
+    month: v.number(),
+    movimiento: v.string(),
+    totalAmount: v.number(),
+    count: v.number(),
+  }).index("by_year_month_movimiento", ["year", "month", "movimiento"]),
+
+  /** Desglose por fuente (EVO, DEC, CODI, NO_DEFINIDO) por día. */
+  datamappingDailyFuenteBreakdown: defineTable({
+    year: v.number(),
+    month: v.number(),
+    day: v.number(),
+    fuente: v.string(),
+    count: v.number(),
+    monto: v.number(),
+  }).index("by_year_month_day", ["year", "month", "day"]),
+
+  /** Desglose EVO (Tarjeta) vs Transferencia por día, para PaymentChannelsSection. */
+  datamappingDailySourceBreakdown: defineTable({
+    year: v.number(),
+    month: v.number(),
+    day: v.number(),
+    evoCount: v.number(),
+    evoMonto: v.number(),
+    ventanillaCount: v.number(),
+    ventanillaMonto: v.number(),
+  }).index("by_year_month_day", ["year", "month", "day"]),
+
   /** Notas de análisis editables. */
   analysisNotes: defineTable({
     id: v.string(),

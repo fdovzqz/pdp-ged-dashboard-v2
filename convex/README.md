@@ -41,6 +41,17 @@ Usados por `getPaymentChannelStats` para desglose EVO vs Ventanilla por día.
 - **deletePaymentsByDate** – Borra registros con importDate = date.
 - **deletePaymentsByReferencias** – Borra registros con las referencias indicadas (para limpiar datos con importDate incorrecto antes de re-sync).
 
+### Agregaciones DataMapping
+
+Para visualizar Análisis Mensual y Anual con datos exclusivamente de DynamoDB (datamapping):
+
+- **datamappingETL.buildDatamappingAggregates** – Lee `datamappingRecords`, agrupa por mes (updatedAt) y escribe en tablas `*Datamapping`.
+- **datamappingMutations** – `batchInsert*Datamapping`, `clearDatamappingAggregatesForMonth`.
+- **januaryQueriesDatamapping** / **annualQueriesDatamapping** – Queries equivalentes a las de CloudWatch pero leyendo de tablas `*Datamapping`.
+- **getDatamappingRecordsByMonthPaginated** – Paginada por mes para el ETL.
+
+Ver [datamapping-aggregations.md](../datamapping-aggregations.md) para detalles.
+
 ### Queries
 
 - **getDayComparison** – Comparación por fuente para una fecha: conteo, monto total, por movimiento.

@@ -401,7 +401,7 @@ export const exploreDatamappingAttributes = action({
 });
 
 const JAN_2026_RECONCILIATION_MONTH = "2026-01";
-/** Enero 2026 en México (UTC-6): [1 ene 00:00, 1 feb 00:00) = [2026-01-01T06:00Z, 2026-02-01T06:00Z). */
+/** Enero 2026 en hora México (UTC-6): [1 ene 00:00, 1 feb 00:00) local = [2026-01-01T06:00Z, 2026-02-01T06:00Z). Ambas fuentes estandarizadas a México. */
 const JAN_2026_START = "2026-01-01T06:00:00.000Z";
 const JAN_2026_END = "2026-02-01T06:00:00.000Z";
 const JAN_2026_CW_PAGE = 5000;
@@ -419,7 +419,12 @@ export const getJanuary2026Reconciliation = action({
 
     const byRefCw = new Map<
       string,
-      { monto: number; logSource: "payment" | "v1" | "v2"; importMonth: string }
+      {
+        monto: number;
+        logSource: "payment" | "v1" | "v2";
+        importMonth: string;
+        timestamp: string;
+      }
     >();
     const order: Record<string, number> = { payment: 0, v2: 1, v1: 2 };
     let cwTotalRecords = 0;
@@ -444,6 +449,7 @@ export const getJanuary2026Reconciliation = action({
           monto: number;
           logSource: string;
           importMonth?: string;
+          timestamp?: string;
         }>;
         isDone: boolean;
         continueCursor: string | null;
@@ -459,6 +465,7 @@ export const getJanuary2026Reconciliation = action({
             monto: r.monto,
             logSource: r.logSource as "payment" | "v1" | "v2",
             importMonth: r.importMonth ?? "",
+            timestamp: r.timestamp ?? "",
           });
         }
       }
@@ -514,13 +521,17 @@ export const getJanuary2026Reconciliation = action({
       logSource: string;
     }> = [];
 
-    for (const [ref, { monto, logSource, importMonth }] of byRefCw) {
+    for (const [ref, { monto, logSource, importMonth, timestamp }] of byRefCw) {
       if (!byRefDdb.has(ref)) {
         onlyInCloudWatch.push(ref);
       } else {
         const ddb = byRefDdb.get(ref)!;
-        const cwMonth = (importMonth ?? "").substring(0, 7); // ya en hora México (parsers)
-        const ddbMonth = timestampToMexicoMonth(ddb.updatedAt ?? ""); // UTC → México UTC-6
+        // Ambas fuentes en hora México (UTC-6): mes CW desde timestamp o importMonth, mes DDB desde updatedAt
+        const cwMonth =
+          timestamp && /^\d{4}/.test(timestamp)
+            ? timestampToMexicoMonth(timestamp)
+            : (importMonth ?? "").substring(0, 7);
+        const ddbMonth = timestampToMexicoMonth(ddb.updatedAt ?? "");
         const sameMonth = cwMonth !== "" && ddbMonth !== "" && cwMonth === ddbMonth;
         if (monto === ddb.monto) {
           if (sameMonth) {
@@ -529,7 +540,7 @@ export const getJanuary2026Reconciliation = action({
             inBothMonthMismatch.push({
               referencia: ref,
               monto,
-              importMonth: importMonth ?? "",
+              importMonth: (cwMonth || importMonth) ?? "",
               datamappingUpdatedAt: ddb.updatedAt,
               logSource,
             });
@@ -633,12 +644,16 @@ export const getJanuary2026Reconciliation = action({
     const BATCH = 400;
     const onlyCwRecords = onlyInCloudWatchFiltered.map((ref) => {
       const x = byRefCw.get(ref)!;
+      const cwMonthMexico =
+        x.timestamp && /^\d{4}/.test(x.timestamp)
+          ? timestampToMexicoMonth(x.timestamp)
+          : (x.importMonth ?? "").substring(0, 7);
       return {
         kind: "onlyCw" as const,
         referencia: ref,
         monto: x.monto,
         logSource: x.logSource,
-        importMonth: x.importMonth || undefined,
+        importMonth: cwMonthMexico || x.importMonth || undefined,
       };
     });
     const onlyDdbRecords = onlyInDynamoDBFiltered.map((ref) => {
@@ -653,13 +668,17 @@ export const getJanuary2026Reconciliation = action({
     const mismatchRecords = inBothMismatch.map((r) => {
       const cw = byRefCw.get(r.referencia)!;
       const ddb = byRefDdb.get(r.referencia)!;
+      const cwMonthMexico =
+        cw.timestamp && /^\d{4}/.test(cw.timestamp)
+          ? timestampToMexicoMonth(cw.timestamp)
+          : (cw.importMonth ?? "").substring(0, 7);
       return {
         kind: "mismatch" as const,
         referencia: r.referencia,
         montoCloudWatch: r.montoCloudWatch,
         montoDynamoDB: r.montoDynamoDB,
         logSource: r.logSource,
-        importMonth: cw.importMonth || undefined,
+        importMonth: cwMonthMexico || cw.importMonth || undefined,
         datamappingUpdatedAt: ddb.updatedAt,
       };
     });
@@ -1976,6 +1995,34 @@ export const getReferenciasAboveMonto = action({
 
     results.sort((a, b) => b.monto - a.monto);
     return results;
+  },
+});
+
+/** Conteo de referencias por código `fuente` en un mes. Pagina internamente. */
+export const getDatamappingFuenteCountsByMonth = action({
+  args: { month: v.string() },
+  handler: async (ctx, { month }): Promise<Array<{ value: string; count: number }>> => {
+    const byFuente = new Map<string, number>();
+    let cursor: string | null = null;
+    while (true) {
+      const result: {
+        page: Array<{ fuente?: string }>;
+        isDone: boolean;
+        continueCursor: string | null;
+      } = await ctx.runQuery(api.queries.getDatamappingRecordsByMonthPaginated, {
+        month,
+        paginationOpts: { numItems: 1000, cursor },
+      });
+      for (const r of result.page) {
+        const f = (r.fuente ?? "").trim() || "(vacío)";
+        byFuente.set(f, (byFuente.get(f) ?? 0) + 1);
+      }
+      if (result.isDone) break;
+      cursor = result.continueCursor;
+    }
+    return Array.from(byFuente.entries())
+      .map(([value, count]) => ({ value, count }))
+      .sort((a, b) => b.count - a.count);
   },
 });
 

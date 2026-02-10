@@ -63,6 +63,46 @@ export function timestampToMexicoParts(timestamp: string): MexicoDateParts | nul
   };
 }
 
+/**
+ * Parsea updatedAt de DynamoDB datamapping.
+ * Si tiene Z o offset de zona → UTC, se convierte a México.
+ * Si NO tiene zona (ej. "2026-01-15T10:30:00" o "2026-01-15 10:30:00") → se asume
+ * que ya está en hora México y se extrae día/hora exacta del string (sin conversión).
+ */
+export function datamappingUpdatedAtToParts(
+  updatedAt: string
+): MexicoDateParts | null {
+  if (!updatedAt || !/^\d{4}/.test(updatedAt)) return null;
+  const hasTimezone =
+    updatedAt.endsWith("Z") ||
+    /[+-]\d{2}:?\d{2}$/.test(updatedAt) ||
+    updatedAt.includes("+00:00");
+  if (hasTimezone) {
+    return timestampToMexicoParts(updatedAt);
+  }
+  const m = updatedAt.match(
+    /^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2})/
+  );
+  if (m) {
+    return {
+      year: parseInt(m[1], 10),
+      month: parseInt(m[2], 10),
+      day: parseInt(m[3], 10),
+      hour: parseInt(m[4], 10),
+    };
+  }
+  const mDateOnly = updatedAt.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (mDateOnly) {
+    return {
+      year: parseInt(mDateOnly[1], 10),
+      month: parseInt(mDateOnly[2], 10),
+      day: parseInt(mDateOnly[3], 10),
+      hour: 0,
+    };
+  }
+  return null;
+}
+
 /** Determina si una fecha es fin de semana (sábado o domingo). */
 export function isWeekend(year: number, month: number, day: number): boolean {
   const d = new Date(year, month - 1, day);

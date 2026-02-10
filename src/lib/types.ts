@@ -1,5 +1,8 @@
 export type LogSource = "v1" | "v2" | "payment";
 
+/** Fuente de datos para Análisis Mensual y Anual. */
+export type DataSource = "cloudwatch" | "datamapping";
+
 /** Registro de pago. Alineado con schema Convex (paymentRecords); campos opcionales para respuestas API (CloudWatch). */
 export interface PaymentRecord {
   referencia: string;

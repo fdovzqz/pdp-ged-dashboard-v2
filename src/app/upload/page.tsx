@@ -94,6 +94,17 @@ export default function UploadPage(): React.ReactElement {
   >({});
   const [dynamoExtractAllRunning, setDynamoExtractAllRunning] = useState(false);
   const [dynamoExtractCurrentDay, setDynamoExtractCurrentDay] = useState(0);
+  const [selectedDatamappingMonths, setSelectedDatamappingMonths] = useState<
+    Set<string>
+  >(new Set([ANALYSIS_MONTH_STRING]));
+  const [dmAggregatesRunning, setDmAggregatesRunning] = useState(false);
+  const [dmAggregatesResult, setDmAggregatesResult] = useState<Record<
+    string,
+    unknown
+  > | null>(null);
+  const [dmAggregatesError, setDmAggregatesError] = useState<string | null>(
+    null
+  );
 
   useEffect(() => {
     try {
@@ -134,6 +145,9 @@ export default function UploadPage(): React.ReactElement {
   );
   const deleteDatamappingBatch = useMutation(
     api.mutations.deleteDatamappingRecordsBatch
+  );
+  const buildDatamappingAggregates = useAction(
+    api.datamappingETL.buildDatamappingAggregates
   );
 
   const [effectiveStart, effectiveEnd] =
@@ -276,6 +290,32 @@ export default function UploadPage(): React.ReactElement {
       setDynamoDeleting(false);
     }
   }, [deleteDatamappingBatch]);
+
+  const toggleDatamappingMonth = (month: string): void => {
+    setSelectedDatamappingMonths((prev) => {
+      const next = new Set(prev);
+      if (next.has(month)) next.delete(month);
+      else next.add(month);
+      return next;
+    });
+  };
+
+  const handleBuildDatamapping = useCallback(async (): Promise<void> => {
+    setDmAggregatesRunning(true);
+    setDmAggregatesResult(null);
+    setDmAggregatesError(null);
+    try {
+      const months = Array.from(selectedDatamappingMonths).sort();
+      const res = await buildDatamappingAggregates({ months });
+      setDmAggregatesResult(res as Record<string, unknown>);
+    } catch (err) {
+      setDmAggregatesError(
+        err instanceof Error ? err.message : "Error al generar agregaciones"
+      );
+    } finally {
+      setDmAggregatesRunning(false);
+    }
+  }, [buildDatamappingAggregates, selectedDatamappingMonths]);
 
   const handleDeleteAll = useCallback(async (): Promise<void> => {
     setDeleting(true);
@@ -647,6 +687,91 @@ export default function UploadPage(): React.ReactElement {
               {dynamoError}
             </div>
           )}
+
+          <div className="border-t border-slate-700/50 pt-4 mt-4">
+            <h3 className="text-sm font-semibold mb-2">
+              Agregaciones DataMapping (Análisis Mensual / Anual)
+            </h3>
+            <p className="text-xs text-muted-foreground mb-3">
+              Genera tablas agregadas desde <code className="text-xs bg-muted px-1 rounded">datamappingRecords</code> para
+              visualizar en Análisis Mensual y Anual con fuente DataMapping.
+            </p>
+            <div className="flex flex-wrap gap-2 mb-3">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() =>
+                  setSelectedDatamappingMonths(new Set(ALL_MONTHS))
+                }
+                disabled={dmAggregatesRunning}
+                className="bg-white/3 border-border/50"
+              >
+                Seleccionar todos
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setSelectedDatamappingMonths(new Set())}
+                disabled={dmAggregatesRunning}
+                className="bg-white/3 border-border/50"
+              >
+                Deseleccionar todos
+              </Button>
+            </div>
+            <div className="flex flex-wrap gap-2 mb-3">
+              {ALL_MONTHS.map((m) => (
+                <label
+                  key={m}
+                  className="flex items-center gap-2 cursor-pointer px-3 py-1.5 rounded-lg border border-slate-700/50 hover:bg-slate-800/30 text-sm"
+                >
+                  <input
+                    type="checkbox"
+                    checked={selectedDatamappingMonths.has(m)}
+                    onChange={() => toggleDatamappingMonth(m)}
+                    disabled={dmAggregatesRunning}
+                    className="rounded"
+                    suppressHydrationWarning
+                  />
+                  <span>{m}</span>
+                </label>
+              ))}
+            </div>
+            <Button
+              size="sm"
+              onClick={handleBuildDatamapping}
+              disabled={
+                dmAggregatesRunning ||
+                selectedDatamappingMonths.size === 0 ||
+                dynamoLoading
+              }
+              className="gap-2 bg-amber-600 hover:bg-amber-700"
+            >
+              {dmAggregatesRunning ? (
+                <>
+                  <Loader2 className="size-3.5 animate-spin" />
+                  Generando agregaciones...
+                </>
+              ) : (
+                <>
+                  <Database className="size-3.5" />
+                  Generar tablas agregadas (DataMapping)
+                </>
+              )}
+            </Button>
+            {dmAggregatesResult && !dmAggregatesRunning && (
+              <div className="mt-3 rounded-lg bg-emerald-500/10 border border-emerald-500/30 p-3 text-sm text-emerald-400">
+                <p className="font-medium">Agregaciones completadas</p>
+                <pre className="text-xs mt-1 overflow-auto">
+                  {JSON.stringify(dmAggregatesResult, null, 2)}
+                </pre>
+              </div>
+            )}
+            {dmAggregatesError && !dmAggregatesRunning && (
+              <div className="mt-3 rounded-lg bg-destructive/10 border border-destructive/30 p-3 text-sm text-destructive">
+                {dmAggregatesError}
+              </div>
+            )}
+          </div>
         </div>
 
         {/* Registros Cargados - grilla de meses */}

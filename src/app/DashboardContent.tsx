@@ -20,6 +20,7 @@ import {
   getPdfFilename,
   getPdfTitle,
 } from "@/lib/constants";
+import type { DataSource } from "@/lib/types";
 import {
   ContextHeader,
   MonthYearSelector,
@@ -52,6 +53,8 @@ export function DashboardContent(): React.ReactElement {
   const [calendarMode, setCalendarMode] = useState<CalendarMode>("events");
   const [showYearComparison, setShowYearComparison] = useState(false);
 
+  const dataSource: DataSource =
+    searchParams.get("source") === "datamapping" ? "datamapping" : "cloudwatch";
   const monthKeyFromUrl = searchParams.get("month") ?? ANALYSIS_MONTH_STRING;
   const { year: selectedYear, month: selectedMonth } = parseMonthKey(monthKeyFromUrl);
 
@@ -71,86 +74,95 @@ export function DashboardContent(): React.ReactElement {
     []
   );
 
+  const handleSourceChange = useCallback((source: DataSource) => {
+    const url = new URL(window.location.href);
+    url.searchParams.set("source", source);
+    window.history.replaceState({}, "", url.toString());
+    window.location.href = url.toString();
+  }, []);
+
+  const januaryApi = dataSource === "datamapping" ? api.januaryQueriesDatamapping : api.januaryQueries;
+
   const monthLabel = getMonthLabel(selectedYear, selectedMonth);
   const yearKey = String(selectedYear);
 
   /* ──────── Queries ──────── */
-  const historicalData = useQuery(api.januaryQueries.getHistoricalData, {
+  const historicalData = useQuery(januaryApi.getHistoricalData, {
     month: selectedMonth,
   });
   const lastAvailableDay =
-    useQuery(api.januaryQueries.getLastAvailableDay, { month: selectedMonth }) ?? 0;
-  const totals = useQuery(api.januaryQueries.getTotals, { month: selectedMonth }) ?? {
+    useQuery(januaryApi.getLastAvailableDay, { month: selectedMonth }) ?? 0;
+  const totals = useQuery(januaryApi.getTotals, { month: selectedMonth }) ?? {
     [yearKey]: 0,
   };
   const totalsUpToDay =
-    useQuery(api.januaryQueries.getTotalsUpToDay, {
+    useQuery(januaryApi.getTotalsUpToDay, {
       maxDay: lastAvailableDay,
       month: selectedMonth,
     }) ?? totals;
   const totalsAndAmountsUpToDay = useQuery(
-    api.januaryQueries.getTotalsAndAmountsUpToDay,
+    januaryApi.getTotalsAndAmountsUpToDay,
     { maxDay: lastAvailableDay, month: selectedMonth }
   );
   const dailyAverages =
-    useQuery(api.januaryQueries.getDailyAverages, { month: selectedMonth }) ?? {
+    useQuery(januaryApi.getDailyAverages, { month: selectedMonth }) ?? {
       [yearKey]: 0,
     };
   const historicalMax =
-    useQuery(api.januaryQueries.getHistoricalMax, { month: selectedMonth }) ?? {
+    useQuery(januaryApi.getHistoricalMax, { month: selectedMonth }) ?? {
       value: 0,
       day: 0,
       year: 0,
     };
-  const hourlyDistWeekday = useQuery(api.januaryQueries.getHourlyDistribution, {
+  const hourlyDistWeekday = useQuery(januaryApi.getHourlyDistribution, {
     month: selectedMonth,
     dayType: "weekday",
   });
-  const hourlyDistWeekend = useQuery(api.januaryQueries.getHourlyDistribution, {
+  const hourlyDistWeekend = useQuery(januaryApi.getHourlyDistribution, {
     month: selectedMonth,
     dayType: "weekend",
   });
-  const heatmapData = useQuery(api.januaryQueries.getHeatmapAmountData, {
+  const heatmapData = useQuery(januaryApi.getHeatmapAmountData, {
     year: selectedYear,
     month: selectedMonth,
   });
   const weekdayWeekend =
-    useQuery(api.januaryQueries.getWeekdayWeekendStats, { month: selectedMonth }) ?? [];
+    useQuery(januaryApi.getWeekdayWeekendStats, { month: selectedMonth }) ?? [];
   const weekdayWeekendAmounts =
-    useQuery(api.januaryQueries.getWeekdayWeekendStatsWithAmounts, {
+    useQuery(januaryApi.getWeekdayWeekendStatsWithAmounts, {
       month: selectedMonth,
     }) ?? [];
   const periodStats =
-    useQuery(api.januaryQueries.getPeriodStats, { month: selectedMonth }) ?? [];
-  const analysisNotes = useQuery(api.januaryQueries.getAnalysisNotes) ?? [];
-  const amountTotals = useQuery(api.januaryQueries.getAmountTotals, {
+    useQuery(januaryApi.getPeriodStats, { month: selectedMonth }) ?? [];
+  const analysisNotes = useQuery(januaryApi.getAnalysisNotes) ?? [];
+  const amountTotals = useQuery(januaryApi.getAmountTotals, {
     month: selectedMonth,
   });
   const amountByMovement =
-    useQuery(api.januaryQueries.getAmountByMovement, {
+    useQuery(januaryApi.getAmountByMovement, {
       year: selectedYear,
       month: selectedMonth,
     }) ?? [];
-  const paymentChannels = useQuery(api.januaryQueries.getPaymentChannelStats, {
+  const paymentChannels = useQuery(januaryApi.getPaymentChannelStats, {
     month: selectedMonth,
     year: selectedYear,
   });
-  const growthMetrics = useQuery(api.januaryQueries.getGrowthMetrics, {
+  const growthMetrics = useQuery(januaryApi.getGrowthMetrics, {
     month: selectedMonth,
   });
-  const dailyAmountData = useQuery(api.januaryQueries.getDailyAmountData, {
+  const dailyAmountData = useQuery(januaryApi.getDailyAmountData, {
     year: selectedYear,
     month: selectedMonth,
   });
 
   const dayDetailSelected = useQuery(
-    api.januaryQueries.getDayDetail,
+    januaryApi.getDayDetail,
     selectedHeatmapDay !== null
       ? { year: selectedYear, month: selectedMonth, day: selectedHeatmapDay }
       : "skip"
   );
   const dayFinancialSelected = useQuery(
-    api.januaryQueries.getDayFinancialDetail,
+    januaryApi.getDayFinancialDetail,
     selectedHeatmapDay !== null
       ? { year: selectedYear, month: selectedMonth, day: selectedHeatmapDay }
       : "skip"
@@ -276,7 +288,37 @@ export function DashboardContent(): React.ReactElement {
           monthShortName={getMonthShortName(selectedMonth)}
           selectedYear={selectedYear}
           monthSelector={
-            <MonthYearSelector value={monthKey} onChange={handleMonthChange} />
+            <div className="flex flex-wrap items-center gap-3">
+              <div className="flex rounded-lg border border-slate-700/50 overflow-hidden bg-slate-800/40">
+                <button
+                  type="button"
+                  onClick={() => handleSourceChange("cloudwatch")}
+                  className={`px-3 py-1.5 text-xs font-medium transition-colors ${
+                    dataSource === "cloudwatch"
+                      ? "bg-emerald-500/30 text-emerald-400"
+                      : "text-slate-400 hover:text-slate-200"
+                  }`}
+                >
+                  CloudWatch
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleSourceChange("datamapping")}
+                  className={`px-3 py-1.5 text-xs font-medium transition-colors ${
+                    dataSource === "datamapping"
+                      ? "bg-amber-500/30 text-amber-400"
+                      : "text-slate-400 hover:text-slate-200"
+                  }`}
+                >
+                  DataMapping
+                </button>
+              </div>
+              <MonthYearSelector
+                value={monthKey}
+                onChange={handleMonthChange}
+                dataSource={dataSource}
+              />
+            </div>
           }
         />
 
@@ -355,7 +397,9 @@ export function DashboardContent(): React.ReactElement {
           growthMetrics={growthMetrics ?? undefined}
         />
 
-        <PaymentChannelsSection data={paymentChannels} />
+        {paymentChannels != null && (
+          <PaymentChannelsSection data={paymentChannels} />
+        )}
 
         <StatsSection
           weekday={wwYear?.weekday ?? 0}

@@ -42,9 +42,12 @@ reconciliation/
 │   ├── actions.ts       # fetchAndIngestForDate, recreateMonthStatsFromPaymentRecords
 │   ├── mutations.ts     # ingestPaymentBatch, deletePaymentsBy*, updateMonthStatsFromDay
 │   ├── queries.ts       # getDayComparison, getMonthSummary, etc.
-│   ├── januaryETL.ts    # buildJanuaryAggregates
+│   ├── januaryETL.ts    # buildJanuaryAggregates (CloudWatch)
+│   ├── datamappingETL.ts # buildDatamappingAggregates (DynamoDB)
 │   ├── januaryQueries.ts
+│   ├── januaryQueriesDatamapping.ts
 │   ├── januaryMutations.ts
+│   ├── datamappingMutations.ts
 │   ├── schema.ts        # paymentRecords, monthStats, etc.
 │   └── lib/
 │       ├── mexicoDate.ts
@@ -132,4 +135,6 @@ Los scripts `fetch-*` son herramientas de análisis ad-hoc y requieren el dashbo
 
 - [extraction-process.md](extraction-process.md) – Proceso de extracción desde CloudWatch (queries, parsing, deduplicación)
 - [cloudwatch-queries.md](cloudwatch-queries.md) – Queries CloudWatch para V1, V2 y PaymentProcess
+- [reconciliation-dynamodb.md](reconciliation-dynamodb.md) – Reconciliación CloudWatch vs DynamoDB (datamapping)
+- [datamapping-aggregations.md](datamapping-aggregations.md) – Análisis Mensual y Anual desde DataMapping (tablas agregadas)
 - [convex/README.md](convex/README.md) – Funciones Convex del proyecto
