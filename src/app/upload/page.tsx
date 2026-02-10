@@ -77,8 +77,11 @@ export default function UploadPage(): React.ReactElement {
   const [dynamoResult, setDynamoResult] = useState<{
     inserted: number;
     updated: number;
-    batchCount: number;
+    pageCount: number;
+    totalInserted: number;
+    totalUpdated: number;
   } | null>(null);
+  const [dynamoProgressPage, setDynamoProgressPage] = useState(0);
   const [dynamoError, setDynamoError] = useState<string | null>(null);
   const [dynamoDeleting, setDynamoDeleting] = useState(false);
   const [dynamoDeleteDialogOpen, setDynamoDeleteDialogOpen] = useState(false);
@@ -232,17 +235,53 @@ export default function UploadPage(): React.ReactElement {
     setDynamoLoading(true);
     setDynamoResult(null);
     setDynamoError(null);
+    setDynamoProgressPage(0);
+    let totalInserted = 0;
+    let totalUpdated = 0;
+    let pageIndex = 0;
+    let exclusiveStartKey: string | undefined = undefined;
     try {
-      const res = await fetchDatamappingAndIngest({ sinceDate: dynamoSinceDate });
-      setDynamoResult({
-        inserted: res.inserted,
-        updated: res.updated,
-        batchCount: res.batchCount,
-      });
+      do {
+        pageIndex += 1;
+        setDynamoProgressPage(pageIndex);
+        const res = await fetchDatamappingAndIngest({
+          sinceDate: dynamoSinceDate,
+          exclusiveStartKey,
+        });
+        totalInserted += res.inserted;
+        totalUpdated += res.updated;
+        exclusiveStartKey = res.lastEvaluatedKey;
+        if (res.hasMore) {
+          setDynamoResult({
+            inserted: res.inserted,
+            updated: res.updated,
+            pageCount: pageIndex,
+            totalInserted,
+            totalUpdated,
+          });
+        } else {
+          setDynamoResult({
+            inserted: res.inserted,
+            updated: res.updated,
+            pageCount: pageIndex,
+            totalInserted,
+            totalUpdated,
+          });
+          break;
+        }
+      } while (exclusiveStartKey);
     } catch (err) {
       setDynamoError(err instanceof Error ? err.message : "Error al cargar DynamoDB");
+      setDynamoResult({
+        inserted: 0,
+        updated: 0,
+        pageCount: pageIndex,
+        totalInserted,
+        totalUpdated,
+      });
     } finally {
       setDynamoLoading(false);
+      setDynamoProgressPage(0);
     }
   }, [fetchDatamappingAndIngest, dynamoSinceDate]);
 
@@ -581,7 +620,9 @@ export default function UploadPage(): React.ReactElement {
                 {dynamoLoading ? (
                   <>
                     <Loader2 className="size-3.5 animate-spin" />
-                    Cargando...
+                    {dynamoProgressPage > 0
+                      ? `Página ${dynamoProgressPage}...`
+                      : "Cargando..."}
                   </>
                 ) : (
                   <>
@@ -610,8 +651,9 @@ export default function UploadPage(): React.ReactElement {
             <div className="rounded-lg bg-emerald-500/10 border border-emerald-500/30 p-4 text-sm text-emerald-400">
               <p className="font-medium">Carga completada</p>
               <p className="mt-1">
-                Insertados: {dynamoResult.inserted} · Actualizados:{" "}
-                {dynamoResult.updated} · Lotes: {dynamoResult.batchCount}.
+                Total insertados: {dynamoResult.totalInserted} · Total
+                actualizados: {dynamoResult.totalUpdated} · Páginas procesadas:{" "}
+                {dynamoResult.pageCount}.
               </p>
             </div>
           )}

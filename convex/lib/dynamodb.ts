@@ -32,6 +32,56 @@ function getTableName(): string {
   return name;
 }
 
+/** Tamaño de página por llamada (evita timeout de 600s). */
+const DATAMAPPING_PAGE_LIMIT = 1000;
+
+/**
+ * Una página de DynamoDB GSI DateIndex. Para carga progresiva sin exceder 600s.
+ * @param sinceDate - e.g. "2026-01-01"
+ * @param exclusiveStartKey - LastEvaluatedKey serializado (JSON) de la llamada anterior
+ */
+export async function queryDatamappingPage(
+  sinceDate: string,
+  exclusiveStartKey?: string
+): Promise<{
+  items: Record<string, unknown>[];
+  lastEvaluatedKey: string | null;
+}> {
+  const client = getDynamoClient();
+  const tableName = getTableName();
+  let lastKey: Record<string, AttributeValue> | undefined = undefined;
+  if (exclusiveStartKey) {
+    try {
+      lastKey = JSON.parse(exclusiveStartKey) as Record<string, AttributeValue>;
+    } catch {
+      lastKey = undefined;
+    }
+  }
+  const response: QueryCommandOutput = await client.send(
+    new QueryCommand({
+      TableName: tableName,
+      IndexName: DATAMAPPING_INDEX,
+      KeyConditionExpression: "syncGroup = :sg AND updatedAt > :dt",
+      FilterExpression: "#st = :status",
+      ExpressionAttributeNames: { "#st": "status" },
+      ExpressionAttributeValues: {
+        ":sg": { S: String(SYNC_GROUP) },
+        ":dt": { S: sinceDate },
+        ":status": { S: STATUS_PAGO_VALIDADO },
+      },
+      Limit: DATAMAPPING_PAGE_LIMIT,
+      ExclusiveStartKey: lastKey,
+    })
+  );
+  const items = (response.Items ?? []).map((item) =>
+    unmarshall(item) as Record<string, unknown>
+  );
+  const nextKey = response.LastEvaluatedKey
+    ? JSON.stringify(response.LastEvaluatedKey)
+    : null;
+  return { items, lastEvaluatedKey: nextKey };
+}
+
 /**
  * Query DynamoDB GSI DateIndex for items with syncGroup=1, updatedAt > sinceDate,
  * and FilterExpression status = "PAGO VALIDADO". Paginates until no more results.

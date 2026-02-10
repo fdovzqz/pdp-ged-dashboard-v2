@@ -18,6 +18,7 @@ import { normalizeWithConfig } from "./movementCodes";
 import {
   queryDatamappingPagoValidadoSince,
   queryDatamappingPagoValidadoForDay,
+  queryDatamappingPage,
   mapDynamoItemToRecord,
   listFirstItemAttributes,
 } from "./lib/dynamodb";
@@ -291,15 +292,16 @@ export const fetchAndIngestForDate = action({
 });
 
 const DATAMAPPING_INGEST_BATCH = 150;
+/** Límite Convex por acción. Procesamos hasta este número de registros por llamada. */
+const MAX_ITEMS_PER_ACTION = 4000;
 
-/** Consulta DynamoDB GSI DateIndex (syncGroup=1, updatedAt > sinceDate, status=PAGO VALIDADO) y upserta en datamappingRecords. */
+/** Carga DynamoDB → Convex por lotes de hasta 4000. El frontend llama en loop hasta hasMore=false. */
 export const fetchDatamappingAndIngest = action({
-  args: { sinceDate: v.string() },
-  handler: async (ctx, { sinceDate }) => {
-    const startTime = Date.now();
-    let inserted = 0;
-    let updated = 0;
-    let batchCount = 0;
+  args: {
+    sinceDate: v.string(),
+    exclusiveStartKey: v.optional(v.string()),
+  },
+  handler: async (ctx, { sinceDate, exclusiveStartKey }) => {
     type DatamappingRec = {
       referencia: string;
       monto: number;
@@ -310,32 +312,40 @@ export const fetchDatamappingAndIngest = action({
       updatedAt: string;
       rawJson: string;
     };
-    const batch: DatamappingRec[] = [];
-
-    for await (const item of queryDatamappingPagoValidadoSince(sinceDate)) {
-      if (Date.now() - startTime > ACTION_TIME_LIMIT_MS) break;
-      batch.push(mapDynamoItemToRecord(item as Record<string, unknown>));
-      if (batch.length >= DATAMAPPING_INGEST_BATCH) {
-        const result = (await ctx.runMutation(
-          api.mutations.upsertDatamappingBatch,
-          { records: batch }
-        )) as { inserted: number; updated: number };
-        inserted += result.inserted;
-        updated += result.updated;
-        batchCount += 1;
-        batch.length = 0;
+    const records: DatamappingRec[] = [];
+    let cursor: string | undefined = exclusiveStartKey;
+    while (records.length < MAX_ITEMS_PER_ACTION) {
+      const { items, lastEvaluatedKey } = await queryDatamappingPage(
+        sinceDate,
+        cursor
+      );
+      for (const item of items) {
+        records.push(
+          mapDynamoItemToRecord(item as Record<string, unknown>)
+        );
+        if (records.length >= MAX_ITEMS_PER_ACTION) break;
       }
+      cursor = lastEvaluatedKey ?? undefined;
+      if (!cursor) break;
     }
-    if (batch.length > 0) {
+    let inserted = 0;
+    let updated = 0;
+    for (let i = 0; i < records.length; i += DATAMAPPING_INGEST_BATCH) {
+      const batch = records.slice(i, i + DATAMAPPING_INGEST_BATCH);
       const result = (await ctx.runMutation(
         api.mutations.upsertDatamappingBatch,
         { records: batch }
       )) as { inserted: number; updated: number };
       inserted += result.inserted;
       updated += result.updated;
-      batchCount += 1;
     }
-    return { inserted, updated, batchCount };
+    return {
+      inserted,
+      updated,
+      lastEvaluatedKey: cursor ?? undefined,
+      hasMore: cursor != null,
+      pageCount: records.length,
+    };
   },
 });
 
