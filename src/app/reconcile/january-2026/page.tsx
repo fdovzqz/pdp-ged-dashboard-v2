@@ -538,13 +538,13 @@ function ReconciliationErrorsDetail({
     api.queries.getPaymentRecordsMonthsForReferencias,
     referenciasForPaymentLookup.length > 0
       ? { referencias: referenciasForPaymentLookup }
-      : undefined
+      : "skip"
   );
   const datamappingMonthsByRef = useQuery(
     api.queries.getDatamappingMonthsForReferencias,
     referenciasForDatamappingLookup.length > 0
       ? { referencias: referenciasForDatamappingLookup }
-      : undefined
+      : "skip"
   );
 
   useEffect(() => {
