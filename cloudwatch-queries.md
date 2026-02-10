@@ -2,6 +2,8 @@
 
 Queries para analizar pagos de los workflows de reconciliación y procesamiento de pagos.
 
+> **Proceso de extracción automatizado**: El sistema usa queries específicas en `convex/actions.ts` para la sincronización. Ver [extraction-process.md](extraction-process.md) para el flujo completo.
+
 ## Log Groups
 
 - **V1 (legacy)**: `/aws/vendedlogs/states/ReconciliationProcessAndConfirmationStateMachineLogs/master`

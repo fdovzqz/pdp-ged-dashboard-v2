@@ -46,10 +46,11 @@ export async function GET(request: NextRequest) {
     }
 
     // Query that filters by fechaTransaccion month
-    // El formato de fechaTransaccion es: "fechaTransaccion":"2026-01-21T..."
+    // Solo pagos exitosos (TaskStateExited, output != null)
     const query = `
 fields @timestamp, @message
-| filter @message like /Preparar Datos/ and @message like /TaskStateEntered/
+| filter @message like /TaskStateExited/ and @message like /Preparar Datos/
+| filter @message not like /"output":"null"/
 | filter @message like /fechaTransaccion.*${txnMonth}/
 | sort @timestamp desc
 | limit 10000

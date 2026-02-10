@@ -32,6 +32,8 @@ Al sincronizar para una fecha:
 3. Se deduplica con prioridad Payment > V2 > V1.
 4. Se insertan en Convex.
 
+Documentación detallada del proceso de extracción: [extraction-process.md](extraction-process.md).
+
 ## Estructura del Proyecto
 
 ```
@@ -128,5 +130,6 @@ Los scripts `fetch-*` son herramientas de análisis ad-hoc y requieren el dashbo
 
 ## Documentación Adicional
 
+- [extraction-process.md](extraction-process.md) – Proceso de extracción desde CloudWatch (queries, parsing, deduplicación)
 - [cloudwatch-queries.md](cloudwatch-queries.md) – Queries CloudWatch para V1, V2 y PaymentProcess
 - [convex/README.md](convex/README.md) – Funciones Convex del proyecto

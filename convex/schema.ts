@@ -187,6 +187,20 @@ export default defineSchema({
     .index("by_variante", ["variante"])
     .index("by_codigo", ["codigoCanonico"]),
 
+  /** Registros de DynamoDB datamapping (backup Prod) para reconciliación Enero 2026. */
+  datamappingRecords: defineTable({
+    referencia: v.string(),
+    monto: v.number(),
+    fechaPago: v.optional(v.string()),
+    fuente: v.optional(v.string()),
+    urlPago: v.optional(v.string()),
+    tipoMovimiento: v.optional(v.string()),
+    updatedAt: v.string(),
+    rawJson: v.string(),
+  })
+    .index("by_referencia", ["referencia"])
+    .index("by_updatedAt", ["updatedAt"]),
+
   /** Control de procesamiento ETL. */
   processingControl: defineTable({
     key: v.string(),
@@ -195,4 +209,36 @@ export default defineSchema({
     year: v.number(),
     month: v.number(),
   }).index("by_key", ["key"]),
+
+  /** Resumen de la última reconciliación Enero 2026 (una sola fila, se sobrescribe al re-ejecutar). */
+  reconciliationSummary: defineTable({
+    month: v.string(),
+    runAt: v.number(),
+    matchCount: v.number(),
+    onlyCwCount: v.number(),
+    onlyDdbCount: v.number(),
+    mismatchCount: v.number(),
+    /** En ambos lados, mismo monto, pero mes CW ≠ mes DDB (no grave). */
+    monthMismatchCount: v.optional(v.number()),
+    totalUnique: v.number(),
+  }).index("by_month", ["month"]),
+
+  /** Errores/diferencias de reconciliación; se borran al re-ejecutar. kind: onlyCw | onlyDdb | mismatch | monthMismatch */
+  reconciliationErrors: defineTable({
+    kind: v.union(
+      v.literal("onlyCw"),
+      v.literal("onlyDdb"),
+      v.literal("mismatch"),
+      v.literal("monthMismatch")
+    ),
+    referencia: v.string(),
+    monto: v.optional(v.number()),
+    logSource: v.optional(v.string()),
+    montoCloudWatch: v.optional(v.number()),
+    montoDynamoDB: v.optional(v.number()),
+    /** Mes en paymentRecords (importMonth) cuando aplica. */
+    importMonth: v.optional(v.string()),
+    /** updatedAt del registro en datamapping cuando aplica (para mostrar mes). */
+    datamappingUpdatedAt: v.optional(v.string()),
+  }).index("by_kind", ["kind"]),
 });

@@ -5,6 +5,7 @@ import {
   getMovementConfig,
   normalizeWithConfig,
 } from "./movementCodes";
+import { timestampToMexicoMonth } from "./lib/mexicoDate";
 
 /** Límite Convex: 8192 items por retorno. Clamp para paginación reactiva. */
 const MAX_PAGE_ITEMS = 1000;
@@ -446,6 +447,7 @@ export const getPaymentRecordsPageWithDetails = query({
       page: result.page.map((r) => ({
         referencia: r.referencia,
         importDate: r.importDate,
+        importMonth: r.importMonth,
         monto: r.monto,
         logSource: r.logSource,
       })),
@@ -488,6 +490,411 @@ export const findDuplicateReferenciasInMonth = query({
       duplicateReferencias: duplicates.length,
       totalDuplicateRecords: duplicates.reduce((s, d) => s + d.count, 0),
       top: duplicates.slice(0, 20),
+    };
+  },
+});
+
+/** Límite por tabla para no exceder 8192 items en el resultado. */
+const RECONCILIATION_TAKE = 8000;
+
+/**
+ * Reconciliación CloudWatch (paymentRecords) vs DynamoDB (datamappingRecords) por referencia.
+ * Solo considera paymentRecords del mes dado y todos los datamappingRecords ingeridos.
+ */
+export const getReconciliationReport = query({
+  args: { month: v.string() },
+  handler: async (ctx, { month }) => {
+    const [cwRecords, ddbRecords] = await Promise.all([
+      ctx.db
+        .query("paymentRecords")
+        .withIndex("by_month", (q) => q.eq("importMonth", month))
+        .take(RECONCILIATION_TAKE),
+      ctx.db.query("datamappingRecords").take(RECONCILIATION_TAKE),
+    ]);
+
+    const byRefCw = new Map<string, { monto: number; logSource: string }>();
+    for (const r of cwRecords) {
+      const existing = byRefCw.get(r.referencia);
+      if (!existing || r.logSource === "payment")
+        byRefCw.set(r.referencia, { monto: r.monto, logSource: r.logSource });
+    }
+    const byRefDdb = new Map<string, number>();
+    for (const r of ddbRecords) {
+      byRefDdb.set(r.referencia, r.monto);
+    }
+
+    const onlyInCloudWatch: string[] = [];
+    const onlyInDynamoDB: string[] = [];
+    const inBothMatch: Array<{ referencia: string; monto: number }> = [];
+    const inBothMismatch: Array<{
+      referencia: string;
+      montoCloudWatch: number;
+      montoDynamoDB: number;
+    }> = [];
+
+    for (const [ref, { monto }] of byRefCw) {
+      if (!byRefDdb.has(ref)) {
+        onlyInCloudWatch.push(ref);
+      } else {
+        const montoDdb = byRefDdb.get(ref)!;
+        if (monto === montoDdb) {
+          inBothMatch.push({ referencia: ref, monto });
+        } else {
+          inBothMismatch.push({
+            referencia: ref,
+            montoCloudWatch: monto,
+            montoDynamoDB: montoDdb,
+          });
+        }
+      }
+    }
+    for (const [ref] of byRefDdb) {
+      if (!byRefCw.has(ref)) onlyInDynamoDB.push(ref);
+    }
+
+    return {
+      month,
+      totalCloudWatch: cwRecords.length,
+      totalDynamoDB: ddbRecords.length,
+      onlyInCloudWatch: onlyInCloudWatch.length,
+      onlyInDynamoDB: onlyInDynamoDB.length,
+      inBothMatch: inBothMatch.length,
+      inBothMismatch: inBothMismatch.length,
+      sampleOnlyInCloudWatch: onlyInCloudWatch.slice(0, 50),
+      sampleOnlyInDynamoDB: onlyInDynamoDB.slice(0, 50),
+      sampleInBothMismatch: inBothMismatch.slice(0, 50),
+    };
+  },
+});
+
+/** Rango enero 2026 en hora México (UTC-6): [1 ene 00:00, 1 feb 00:00) México = [2026-01-01T06:00Z, 2026-02-01T06:00Z). */
+const JAN_2026_START = "2026-01-01T06:00:00.000Z";
+const JAN_2026_END = "2026-02-01T06:00:00.000Z";
+
+/** Tamaño de página para no exceder 16MB por lectura (datamapping tiene rawJson grande). */
+const JAN_2026_DATAMAPPING_PAGE_SIZE = 500;
+
+/** Tamaño de página CloudWatch (registros más pequeños). */
+const JAN_2026_CLOUDWATCH_PAGE_SIZE = 5000;
+
+/**
+ * Página de datamappingRecords (tabla Convex, origen DynamoDB) para enero 2026.
+ * Usado por la action de reconciliación; solo lectura en Convex, sin AWS.
+ */
+export const getJanuary2026DatamappingPage = query({
+  args: {
+    cursor: v.union(v.string(), v.null()),
+    numItems: v.optional(v.number()),
+  },
+  handler: async (ctx, { cursor, numItems = JAN_2026_DATAMAPPING_PAGE_SIZE }) => {
+    const result = await ctx.db
+      .query("datamappingRecords")
+      .withIndex("by_updatedAt", (q) =>
+        q.gte("updatedAt", JAN_2026_START).lt("updatedAt", JAN_2026_END)
+      )
+      .order("asc")
+      .paginate({ numItems, cursor });
+    return {
+      page: result.page.map((r) => ({
+        referencia: r.referencia,
+        monto: r.monto,
+        updatedAt: r.updatedAt,
+      })),
+      isDone: result.isDone,
+      continueCursor: result.continueCursor,
+    };
+  },
+});
+
+/**
+ * Reconciliación Enero 2026 (versión limitada en una sola query).
+ * Para ~70k registros usar la action getJanuary2026Reconciliation en actions.ts.
+ */
+export const getJanuary2026Reconciliation = query({
+  args: {},
+  handler: async (ctx) => {
+    const month = "2026-01";
+    const [cwRecords, ddbRecords] = await Promise.all([
+      ctx.db
+        .query("paymentRecords")
+        .withIndex("by_month", (q) => q.eq("importMonth", month))
+        .take(RECONCILIATION_TAKE),
+      ctx.db
+        .query("datamappingRecords")
+        .withIndex("by_updatedAt", (q) =>
+          q.gte("updatedAt", JAN_2026_START).lt("updatedAt", JAN_2026_END)
+        )
+        .take(2500),
+    ]);
+
+    const byRefCw = new Map<
+      string,
+      { monto: number; logSource: "payment" | "v1" | "v2" }
+    >();
+    const order: Record<string, number> = { payment: 0, v2: 1, v1: 2 };
+    for (const r of cwRecords) {
+      const existing = byRefCw.get(r.referencia);
+      if (
+        !existing ||
+        order[r.logSource] < order[existing.logSource as keyof typeof order]
+      ) {
+        byRefCw.set(r.referencia, { monto: r.monto, logSource: r.logSource });
+      }
+    }
+    const bySource = { payment: 0, v1: 0, v2: 0 };
+    for (const r of cwRecords) bySource[r.logSource]++;
+    const refsBySource = { payment: 0, v1: 0, v2: 0 };
+    for (const { logSource } of byRefCw.values()) refsBySource[logSource]++;
+
+    const byRefDdb = new Map<string, number>();
+    for (const r of ddbRecords) byRefDdb.set(r.referencia, r.monto);
+
+    const onlyInCloudWatch: string[] = [];
+    const onlyInDynamoDB: string[] = [];
+    const inBothMatch: Array<{ referencia: string; monto: number }> = [];
+    const inBothMismatch: Array<{
+      referencia: string;
+      montoCloudWatch: number;
+      montoDynamoDB: number;
+      logSource: string;
+    }> = [];
+
+    for (const [ref, { monto, logSource }] of byRefCw) {
+      if (!byRefDdb.has(ref)) {
+        onlyInCloudWatch.push(ref);
+      } else {
+        const montoDdb = byRefDdb.get(ref)!;
+        if (monto === montoDdb) {
+          inBothMatch.push({ referencia: ref, monto });
+        } else {
+          inBothMismatch.push({
+            referencia: ref,
+            montoCloudWatch: monto,
+            montoDynamoDB: montoDdb,
+            logSource,
+          });
+        }
+      }
+    }
+    for (const [ref] of byRefDdb) {
+      if (!byRefCw.has(ref)) onlyInDynamoDB.push(ref);
+    }
+    const onlyCwBySource = { payment: 0, v1: 0, v2: 0 };
+    for (const ref of onlyInCloudWatch) {
+      const s = byRefCw.get(ref)?.logSource;
+      if (s) onlyCwBySource[s]++;
+    }
+
+    return {
+      month,
+      cloudWatch: {
+        totalRecords: cwRecords.length,
+        uniqueReferencias: byRefCw.size,
+        bySourceRecords: bySource,
+        bySourceUniqueRefs: refsBySource,
+      },
+      datamapping: {
+        totalRecords: ddbRecords.length,
+        uniqueReferencias: byRefDdb.size,
+        filter: { updatedAtFrom: JAN_2026_START, updatedAtTo: JAN_2026_END },
+        truncated: ddbRecords.length === 2500,
+      },
+      differences: {
+        onlyInCloudWatch: onlyInCloudWatch.length,
+        onlyInDynamoDB: onlyInDynamoDB.length,
+        inBothMatch: inBothMatch.length,
+        inBothMismatch: inBothMismatch.length,
+        onlyInCloudWatchBySource: onlyCwBySource,
+      },
+      samples: {
+        onlyInCloudWatch: onlyInCloudWatch.slice(0, 100),
+        onlyInDynamoDB: onlyInDynamoDB.slice(0, 100),
+        inBothMismatch: inBothMismatch.slice(0, 50),
+        inBothMatch: inBothMatch.slice(0, 30),
+      },
+    };
+  },
+});
+
+// --- Reconciliación Enero 2026: resumen y errores persistidos ---
+
+/** Resumen de la última reconciliación (para mostrar cuadros con %). */
+export const getReconciliationSummaryJanuary2026 = query({
+  args: {},
+  handler: async (ctx) => {
+    const doc = await ctx.db
+      .query("reconciliationSummary")
+      .withIndex("by_month", (q) => q.eq("month", "2026-01"))
+      .first();
+    return doc;
+  },
+});
+
+/** Para enriquecer filas "Solo en Datamapping": devuelve importMonth de paymentRecords por referencia (máx 300 refs). */
+const MAX_REFERENCIAS_LOOKUP = 300;
+
+export const getPaymentRecordsMonthsForReferencias = query({
+  args: { referencias: v.optional(v.array(v.string())) },
+  handler: async (ctx, { referencias }) => {
+    const list = referencias ?? [];
+    const refs = list.slice(0, MAX_REFERENCIAS_LOOKUP);
+    const out: Record<string, string> = {};
+    for (const ref of refs) {
+      const rec = await ctx.db
+        .query("paymentRecords")
+        .withIndex("by_referencia", (q) => q.eq("referencia", ref))
+        .first();
+      if (rec?.importMonth) out[ref] = rec.importMonth;
+    }
+    return out;
+  },
+});
+
+/** Para enriquecer filas "Solo en CloudWatch": devuelve mes (YYYY-MM) de datamappingRecords por referencia (máx 300 refs). */
+export const getDatamappingMonthsForReferencias = query({
+  args: { referencias: v.optional(v.array(v.string())) },
+  handler: async (ctx, { referencias }) => {
+    const list = referencias ?? [];
+    const refs = list.slice(0, MAX_REFERENCIAS_LOOKUP);
+    const out: Record<string, string> = {};
+    for (const ref of refs) {
+      const rec = await ctx.db
+        .query("datamappingRecords")
+        .withIndex("by_referencia", (q) => q.eq("referencia", ref))
+        .first();
+      if (rec?.updatedAt) out[ref] = timestampToMexicoMonth(rec.updatedAt);
+    }
+    return out;
+  },
+});
+
+/** Devuelve updatedAt completo de datamappingRecords por referencia (máx 300 refs). Usado en la action para reclasificar onlyCw → monthMismatch. */
+export const getDatamappingUpdatedAtForReferencias = query({
+  args: { referencias: v.optional(v.array(v.string())) },
+  handler: async (ctx, { referencias }) => {
+    const list = referencias ?? [];
+    const refs = list.slice(0, MAX_REFERENCIAS_LOOKUP);
+    const out: Record<string, string> = {};
+    for (const ref of refs) {
+      const rec = await ctx.db
+        .query("datamappingRecords")
+        .withIndex("by_referencia", (q) => q.eq("referencia", ref))
+        .first();
+      if (rec?.updatedAt) out[ref] = rec.updatedAt;
+    }
+    return out;
+  },
+});
+
+/** Página de errores por tipo (onlyCw | onlyDdb | mismatch | monthMismatch) para tabla y CSV. */
+export const getReconciliationErrorsPage = query({
+  args: {
+    kind: v.union(
+      v.literal("onlyCw"),
+      v.literal("onlyDdb"),
+      v.literal("mismatch"),
+      v.literal("monthMismatch")
+    ),
+    cursor: v.union(v.string(), v.null()),
+    numItems: v.optional(v.number()),
+  },
+  handler: async (ctx, { kind, cursor, numItems = 500 }) => {
+    const result = await ctx.db
+      .query("reconciliationErrors")
+      .withIndex("by_kind", (q) => q.eq("kind", kind))
+      .order("asc")
+      .paginate({ numItems, cursor });
+    return {
+      page: result.page,
+      isDone: result.isDone,
+      continueCursor: result.continueCursor,
+    };
+  },
+});
+
+/**
+ * Diagnóstico: por qué una referencia aparece como "solo en CloudWatch" u otra categoría.
+ * Busca en paymentRecords y en datamappingRecords (sin filtrar por updatedAt) y comprueba
+ * si entra en el rango de la reconciliación (updatedAt en enero 2026).
+ * Si referencia no se envía o está vacía, devuelve conclusion indicándolo (para poder usar useQuery con skip).
+ */
+export const investigateReferenciaReconciliation = query({
+  args: { referencia: v.optional(v.string()) },
+  handler: async (ctx, { referencia }) => {
+    if (referencia == null || referencia.trim() === "") {
+      return {
+        referencia: "",
+        paymentRecords: [],
+        datamappingRecords: [],
+        inJanuary2026Range: false,
+        conclusion: "Ingresa una referencia y pulsa Investigar.",
+        note: null,
+      };
+    }
+    const ref = referencia.trim();
+    const [cwMatches, ddbMatches] = await Promise.all([
+      ctx.db
+        .query("paymentRecords")
+        .withIndex("by_referencia", (q) => q.eq("referencia", ref))
+        .take(50),
+      ctx.db
+        .query("datamappingRecords")
+        .withIndex("by_referencia", (q) => q.eq("referencia", ref))
+        .take(50),
+    ]);
+
+    const janStart = "2026-01-01T06:00:00.000Z";
+    const janEnd = "2026-02-01T06:00:00.000Z";
+    const datamappingWithRange = ddbMatches.map((r) => ({
+      referencia: r.referencia,
+      monto: r.monto,
+      updatedAt: r.updatedAt,
+      inJanuary2026: r.updatedAt >= janStart && r.updatedAt < janEnd,
+    }));
+
+    const inCw = cwMatches.length > 0;
+    const inDdbAny = ddbMatches.length > 0;
+    const inDdbJanuary = datamappingWithRange.some((r) => r.inJanuary2026);
+    /** La reconciliación solo usa paymentRecords con importMonth = 2026-01. */
+    const cwInJanuary2026 = cwMatches.some((r) => r.importMonth === "2026-01");
+
+    let conclusion: string;
+    if (!inCw && !inDdbAny) {
+      conclusion = "No encontrada en paymentRecords ni en datamappingRecords.";
+    } else if (inCw && !inDdbAny) {
+      conclusion =
+        "Está en CloudWatch (paymentRecords) pero no hay ningún registro en datamappingRecords con esta referencia exacta. Posibles causas: (1) referencia en DynamoDB con otro formato (ej. número que perdió precisión > 2^53); (2) aún no ingerido.";
+    } else if (!inCw && inDdbAny) {
+      conclusion =
+        "Está en datamappingRecords pero no en paymentRecords.";
+    } else if (cwInJanuary2026 && inDdbJanuary) {
+      conclusion =
+        "Está en ambas tablas con importMonth 2026-01 (paymentRecords) y updatedAt en enero 2026 (datamapping). Debería aparecer como match o mismatch; si no, revisar duplicados o prioridad.";
+    } else if (!cwInJanuary2026 && inDdbJanuary) {
+      const months = [...new Set(cwMatches.map((r) => r.importMonth))].join(", ");
+      conclusion =
+        `Está en ambas tablas, pero en paymentRecords el importMonth no es 2026-01 (tiene: ${months}). La reconciliación solo considera paymentRecords de enero 2026; en datamapping sí tiene updatedAt en enero 2026. Por eso aparece como "Solo en Datamapping".`;
+    } else if (cwInJanuary2026 && !inDdbJanuary) {
+      conclusion =
+        "Está en paymentRecords con importMonth 2026-01, pero en datamappingRecords el updatedAt está fuera de enero 2026. La reconciliación solo considera datamapping con updatedAt en ese rango; por eso aparece como 'Solo en CloudWatch'.";
+    } else {
+      conclusion =
+        "Está en ambas tablas; ni paymentRecords tiene importMonth 2026-01 ni datamapping tiene updatedAt en enero 2026. Para esta reconciliación (ene 2026) no entra en ninguno de los dos lados.";
+    }
+
+    return {
+      referencia: ref,
+      paymentRecords: cwMatches.map((r) => ({
+        referencia: r.referencia,
+        monto: r.monto,
+        logSource: r.logSource,
+        importMonth: r.importMonth,
+        importDate: r.importDate,
+      })),
+      datamappingRecords: datamappingWithRange,
+      inJanuary2026Range: inDdbJanuary,
+      conclusion,
+      note: "Referencias numéricas > 2^53 pueden truncarse si DynamoDB las guarda como número (precisión JS).",
     };
   },
 });

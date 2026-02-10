@@ -41,10 +41,11 @@ export async function GET(request: NextRequest) {
     const end = new Date(endDate);
     end.setHours(23, 59, 59, 999);
 
-    // Query para ver logs de pagos (Preparar Datos + TaskStateEntered)
+    // Query para ver logs de pagos exitosos (TaskStateExited, output != null)
     const exploreQuery = `
 fields @timestamp, @message
-| filter @message like /Preparar Datos/ and @message like /TaskStateEntered/
+| filter @message like /TaskStateExited/ and @message like /Preparar Datos/
+| filter @message not like /"output":"null"/
 | sort @timestamp desc
 | limit 20
 `;

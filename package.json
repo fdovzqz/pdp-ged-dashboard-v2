@@ -9,10 +9,13 @@
     "lint": "eslint",
     "convex:dev": "convex dev",
     "convex:deploy": "convex deploy",
-    "regenerate-months": "tsx scripts/regenerate-inconsistent-months.ts"
+    "regenerate-months": "tsx scripts/regenerate-inconsistent-months.ts",
+    "trim-feb-2026": "npx convex run actions:trimFebruary2026FutureData"
   },
   "dependencies": {
     "@aws-sdk/client-cloudwatch-logs": "^3.983.0",
+    "@aws-sdk/client-dynamodb": "^3.986.0",
+    "@aws-sdk/util-dynamodb": "^3.986.0",
     "@fontsource/dm-sans": "^5.2.8",
     "@fontsource/space-grotesk": "^5.2.10",
     "class-variance-authority": "^0.7.1",

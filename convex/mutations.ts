@@ -421,6 +421,22 @@ export const setMonthStatsFromAggregation = mutation({
   },
 });
 
+/** Elimina registros por _id. Usar en lotes para evitar límite de escrituras. */
+export const deletePaymentsByIds = mutation({
+  args: { ids: v.array(v.id("paymentRecords")) },
+  handler: async (ctx, { ids }) => {
+    let deleted = 0;
+    for (const id of ids) {
+      const doc = await ctx.db.get(id);
+      if (doc) {
+        await ctx.db.delete(id);
+        deleted++;
+      }
+    }
+    return { deleted };
+  },
+});
+
 /** Elimina registros con estas referencias. Usar antes de insert para reemplazar datos antiguos (p.ej. con importDate incorrecto). */
 export const deletePaymentsByReferencias = mutation({
   args: { referencias: v.array(v.string()) },
@@ -437,5 +453,149 @@ export const deletePaymentsByReferencias = mutation({
       }
     }
     return { deleted };
+  },
+});
+
+/** Validador para un registro de DynamoDB datamapping (reconciliación Enero 2026). */
+const datamappingRecordValidator = v.object({
+  referencia: v.string(),
+  monto: v.number(),
+  fechaPago: v.optional(v.string()),
+  fuente: v.optional(v.string()),
+  urlPago: v.optional(v.string()),
+  tipoMovimiento: v.optional(v.string()),
+  updatedAt: v.string(),
+  rawJson: v.string(),
+});
+
+/**
+ * Upserta un lote en datamappingRecords por referencia solamente:
+ * si ya existe un doc con esa referencia, se actualiza (latest wins); si no, se inserta.
+ * Así, si en DynamoDB actualizan un registro (misma referencia, nuevo updatedAt) no se duplica.
+ */
+export const upsertDatamappingBatch = mutation({
+  args: {
+    records: v.array(datamappingRecordValidator),
+  },
+  handler: async (ctx, { records }) => {
+    let inserted = 0;
+    let updated = 0;
+    for (const rec of records) {
+      const existing = await ctx.db
+        .query("datamappingRecords")
+        .withIndex("by_referencia", (q) => q.eq("referencia", rec.referencia))
+        .first();
+      const doc = {
+        referencia: rec.referencia,
+        monto: rec.monto,
+        ...(rec.fechaPago !== undefined ? { fechaPago: rec.fechaPago } : {}),
+        ...(rec.fuente !== undefined ? { fuente: rec.fuente } : {}),
+        ...(rec.urlPago !== undefined ? { urlPago: rec.urlPago } : {}),
+        ...(rec.tipoMovimiento !== undefined
+          ? { tipoMovimiento: rec.tipoMovimiento }
+          : {}),
+        updatedAt: rec.updatedAt,
+        rawJson: rec.rawJson,
+      };
+      if (existing) {
+        await ctx.db.patch(existing._id, doc);
+        updated += 1;
+      } else {
+        await ctx.db.insert("datamappingRecords", doc);
+        inserted += 1;
+      }
+    }
+    return { inserted, updated };
+  },
+});
+
+/** Elimina un lote de datamappingRecords (para re-import). Llamar en loop hasta deleted=0. */
+const DATAMAPPING_BATCH = 500;
+
+export const deleteDatamappingRecordsBatch = mutation({
+  args: {},
+  handler: async (ctx) => {
+    const records = await ctx.db.query("datamappingRecords").take(DATAMAPPING_BATCH);
+    for (const r of records) {
+      await ctx.db.delete(r._id);
+    }
+    return { deleted: records.length };
+  },
+});
+
+// --- Reconciliación Enero 2026: tablas de errores (se borran al re-ejecutar) ---
+
+const RECONCILIATION_ERRORS_BATCH = 400;
+
+/** Borra resumen y un lote de reconciliationErrors. La action debe llamar en loop hasta deleted < batch size. */
+export const clearReconciliationJanuary2026Batch = mutation({
+  args: {},
+  handler: async (ctx) => {
+    const summary = await ctx.db
+      .query("reconciliationSummary")
+      .withIndex("by_month", (q) => q.eq("month", "2026-01"))
+      .first();
+    if (summary) await ctx.db.delete(summary._id);
+    const batch = await ctx.db.query("reconciliationErrors").take(RECONCILIATION_ERRORS_BATCH);
+    for (const r of batch) await ctx.db.delete(r._id);
+    return { deleted: batch.length };
+  },
+});
+
+const reconciliationErrorValidator = v.object({
+  kind: v.union(
+    v.literal("onlyCw"),
+    v.literal("onlyDdb"),
+    v.literal("mismatch"),
+    v.literal("monthMismatch")
+  ),
+  referencia: v.string(),
+  monto: v.optional(v.number()),
+  logSource: v.optional(v.string()),
+  montoCloudWatch: v.optional(v.number()),
+  montoDynamoDB: v.optional(v.number()),
+  importMonth: v.optional(v.string()),
+  datamappingUpdatedAt: v.optional(v.string()),
+});
+
+/** Inserta un lote en reconciliationErrors. */
+export const insertReconciliationErrorsBatch = mutation({
+  args: { records: v.array(reconciliationErrorValidator) },
+  handler: async (ctx, { records }) => {
+    for (const r of records) {
+      await ctx.db.insert("reconciliationErrors", r);
+    }
+    return { inserted: records.length };
+  },
+});
+
+/** Escribe el resumen de la última reconciliación (sobrescribe si ya existe para 2026-01). */
+export const setReconciliationSummaryJanuary2026 = mutation({
+  args: {
+    matchCount: v.number(),
+    onlyCwCount: v.number(),
+    onlyDdbCount: v.number(),
+    mismatchCount: v.number(),
+    monthMismatchCount: v.optional(v.number()),
+    totalUnique: v.number(),
+  },
+  handler: async (ctx, args) => {
+    const existing = await ctx.db
+      .query("reconciliationSummary")
+      .withIndex("by_month", (q) => q.eq("month", "2026-01"))
+      .first();
+    const doc = {
+      month: "2026-01",
+      runAt: Date.now(),
+      matchCount: args.matchCount,
+      onlyCwCount: args.onlyCwCount,
+      onlyDdbCount: args.onlyDdbCount,
+      mismatchCount: args.mismatchCount,
+      monthMismatchCount: args.monthMismatchCount ?? 0,
+      totalUnique: args.totalUnique,
+    };
+    if (existing) await ctx.db.replace(existing._id, doc);
+    else await ctx.db.insert("reconciliationSummary", doc);
+    return { ok: true };
   },
 });

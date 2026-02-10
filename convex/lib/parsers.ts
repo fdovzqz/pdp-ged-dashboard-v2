@@ -40,14 +40,16 @@ function extractImportMonth(ts: string, fechaTxn: string): string {
   return date ? date.substring(0, 7) : "2026-01";
 }
 
-/** Fecha YYYY-MM-DD en hora México (UTC-6). Timestamps CloudWatch y fechaTxn son UTC. */
+/** Fecha YYYY-MM-DD en hora México (UTC-6). Para V1/V2 preferimos fecha transacción (dato negocio). */
 function extractImportDate(ts: string, fechaTxn: string): string {
-  if (ts && /^\d{4}/.test(ts)) {
-    const d = timestampToMexicoDate(ts);
+  // Preferir fecha de la transacción cuando existe (asigna al día correcto aunque el workflow corra después)
+  if (fechaTxn && /^\d{4}/.test(fechaTxn)) {
+    if (/^\d{4}-\d{2}-\d{2}$/.test(fechaTxn.trim())) return fechaTxn.trim();
+    const d = timestampToMexicoDate(fechaTxn);
     if (d) return d;
   }
-  if (fechaTxn && /^\d{4}/.test(fechaTxn)) {
-    const d = timestampToMexicoDate(fechaTxn);
+  if (ts && /^\d{4}/.test(ts)) {
+    const d = timestampToMexicoDate(ts);
     if (d) return d;
   }
   return "";
@@ -80,6 +82,49 @@ export function parseV1V2(
           items = transacciones as Record<string, unknown>[];
         } else if (input?.referencia) {
           items = [input];
+        }
+      }
+
+      // TaskStateExited: output tiene estructura distinta; details.input puede no existir
+      if (items.length === 0 && typeof details.output === "string" && details.output !== "null") {
+        try {
+          const output = JSON.parse(details.output) as Record<string, unknown>;
+          const data = output?.data as Record<string, unknown> | undefined;
+          const payload = output?.payload as Record<string, unknown> | undefined;
+          const transacciones =
+            data?.transacciones ??
+            payload?.transacciones ??
+            (output?.transacciones as Record<string, unknown>[] | undefined);
+          if (Array.isArray(transacciones)) {
+            items = transacciones as Record<string, unknown>[];
+          } else if (output?.referencia || data?.referencia || payload?.referencia) {
+            const obj = (output?.referencia ? output : data?.referencia ? data : payload) as Record<string, unknown>;
+            items = [obj];
+          } else {
+            const found = findTransactionInOutput(output);
+            if (found.length > 0) items = found;
+          }
+        } catch {
+          /* ignore */
+        }
+        if (items.length === 0) {
+          const ext = extractFromJson(details.output);
+          if (ext.referencia) {
+            items = [{
+              referencia: ext.referencia,
+              importeTxn: ext.monto,
+              fechaTransaccion: ext.fechaTransaccion,
+              tramiteId: ext.tramiteId,
+              movimiento: ext.movimiento,
+            }];
+          }
+        }
+        // Fallback: referencia en output cuando el JSON tiene estructura distinta
+        if (items.length === 0 && typeof details.output === "string" && details.output.includes("referencia")) {
+          const refMatch = details.output.match(/"referencia"\s*:\s*"(\d{15,})"/);
+          if (refMatch?.[1]) {
+            items = [{ referencia: refMatch[1], importeTxn: undefined, fechaTransaccion: undefined }];
+          }
         }
       }
 
@@ -123,6 +168,28 @@ export function parseV1V2(
   return results;
 }
 
+/** Busca recursivamente objetos con referencia en output (TaskStateExited). */
+function findTransactionInOutput(obj: unknown): Record<string, unknown>[] {
+  if (!obj || typeof obj !== "object") return [];
+  const rec = obj as Record<string, unknown>;
+  if (rec.referencia && typeof rec.referencia === "string") return [rec];
+  const data = rec.data ?? rec.payload ?? rec.Payload;
+  if (data && typeof data === "object") {
+    const d = data as Record<string, unknown>;
+    if (Array.isArray(d.transacciones)) return d.transacciones as Record<string, unknown>[];
+    if (d.referencia) return [d];
+  }
+  for (const v of Object.values(rec)) {
+    if (Array.isArray(v)) {
+      const first = v[0];
+      if (first && typeof first === "object" && (first as Record<string, unknown>).referencia) {
+        return v as Record<string, unknown>[];
+      }
+    }
+  }
+  return [];
+}
+
 function extractFromJson(jsonStr: string): {
   referencia?: string;
   monto?: number;
@@ -134,15 +201,23 @@ function extractFromJson(jsonStr: string): {
   try {
     const parsed = JSON.parse(jsonStr) as Record<string, unknown>;
     result.referencia = String(parsed.referencia ?? parsed.reference ?? "").trim() || undefined;
-    const amt = parsed.importeTxn ?? parsed.monto ?? parsed.total_pagar;
+    const amt = parsed.importeTxn ?? parsed.monto ?? parsed.total_pagar ?? parsed.amount;
     result.monto = typeof amt === "number" ? amt : typeof amt === "string" ? parseFloat(amt) : undefined;
     result.fechaTransaccion = String(parsed.fechaTransaccion ?? parsed.fecha ?? "").trim() || undefined;
     result.tramiteId = parsed.tramiteId != null ? Number(parsed.tramiteId) : undefined;
     result.movimiento = String(parsed.movimiento ?? parsed.tipo ?? parsed.type ?? "").trim() || undefined;
   } catch {
-    const refMatch = jsonStr.match(/"referencia"\s*:\s*"([^"]+)"/);
+    const refMatch =
+      jsonStr.match(/"referencia"\s*:\s*"([^"]+)"/) ??
+      jsonStr.match(/\\"referencia\\"\s*:\s*\\"([^"\\]+)\\"/);
     if (refMatch) result.referencia = refMatch[1];
-    const montoMatch = jsonStr.match(/"total_pagar"\s*:\s*"([^"]+)"/) ?? jsonStr.match(/"total_pagar"\s*:\s*(\d+)/);
+    const montoMatch =
+      jsonStr.match(/"importeTxn"\s*:\s*"([^"]+)"/) ??
+      jsonStr.match(/"importeTxn"\s*:\s*(\d+)/) ??
+      jsonStr.match(/\\"importeTxn\\"\s*:\s*\\"([^"\\]+)\\"/) ??
+      jsonStr.match(/\\"importeTxn\\"\s*:\s*(\d+)/) ??
+      jsonStr.match(/"total_pagar"\s*:\s*"([^"]+)"/) ??
+      jsonStr.match(/"total_pagar"\s*:\s*(\d+)/);
     if (montoMatch) result.monto = parseFloat(montoMatch[1] ?? montoMatch[2] ?? "0");
     const tramiteMatch = jsonStr.match(/"tramiteId"\s*:\s*(\d+)/);
     if (tramiteMatch) result.tramiteId = parseInt(tramiteMatch[1], 10);

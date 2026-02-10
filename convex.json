@@ -1,6 +1,6 @@
 {
   "functions": "convex/",
   "node": {
-    "externalPackages": ["@aws-sdk/client-cloudwatch-logs"]
+    "externalPackages": ["@aws-sdk/client-cloudwatch-logs","@aws-sdk/client-dynamodb","@aws-sdk/util-dynamodb"]
   }
 }

@@ -69,7 +69,8 @@ fields @timestamp, @message
 `
       : `
 fields @timestamp, @message
-| filter @message like /Preparar Datos/ and @message like /TaskStateEntered/
+| filter @message like /TaskStateExited/ and @message like /Preparar Datos/
+| filter @message not like /"output":"null"/
 | sort @timestamp desc
 | limit ${limit}
 `;

@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useCallback, useRef, useEffect } from "react";
+import Link from "next/link";
 import { useAction, useMutation, useQuery } from "convex/react";
 import { api } from "convex/_generated/api";
 import { Button } from "@/components/ui/button";
@@ -21,7 +22,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { Upload, Loader2, Save, Plus, Trash2, RefreshCw } from "lucide-react";
+import { Upload, Loader2, Save, Plus, Trash2, RefreshCw, Database } from "lucide-react";
 import { SyncDialog } from "@/components/dashboard/SyncDialog";
 import { IngestionStatus } from "@/components/dashboard/IngestionStatus";
 import {
@@ -71,6 +72,28 @@ export default function UploadPage(): React.ReactElement {
   const [syncError, setSyncError] = useState<string | null>(null);
   const [deleting, setDeleting] = useState(false);
   const syncCancelledRef = useRef(false);
+  const [dynamoSinceDate, setDynamoSinceDate] = useState("2026-01-01");
+  const [dynamoLoading, setDynamoLoading] = useState(false);
+  const [dynamoResult, setDynamoResult] = useState<{
+    inserted: number;
+    updated: number;
+    batchCount: number;
+  } | null>(null);
+  const [dynamoError, setDynamoError] = useState<string | null>(null);
+  const [dynamoDeleting, setDynamoDeleting] = useState(false);
+  const [dynamoDeleteDialogOpen, setDynamoDeleteDialogOpen] = useState(false);
+  const [dynamoByDayStatus, setDynamoByDayStatus] = useState<
+    Record<number, "idle" | "loading" | "done" | "error">
+  >(() => {
+    const o: Record<number, "idle" | "loading" | "done" | "error"> = {};
+    for (let d = 1; d <= 31; d++) o[d] = "idle";
+    return o;
+  });
+  const [dynamoByDayResult, setDynamoByDayResult] = useState<
+    Record<number, { inserted: number; updated: number }>
+  >({});
+  const [dynamoExtractAllRunning, setDynamoExtractAllRunning] = useState(false);
+  const [dynamoExtractCurrentDay, setDynamoExtractCurrentDay] = useState(0);
 
   useEffect(() => {
     try {
@@ -103,6 +126,15 @@ export default function UploadPage(): React.ReactElement {
   const fetchAndIngest = useAction(api.actions.fetchAndIngestForDate);
   const deletePaymentsByMonth = useMutation(api.mutations.deletePaymentsByMonth);
   const deleteMonthStats = useMutation(api.mutations.deleteMonthStats);
+  const fetchDatamappingAndIngest = useAction(
+    api.actions.fetchDatamappingAndIngest
+  );
+  const fetchDatamappingForDay = useAction(
+    api.actions.fetchDatamappingForDay
+  );
+  const deleteDatamappingBatch = useMutation(
+    api.mutations.deleteDatamappingRecordsBatch
+  );
 
   const [effectiveStart, effectiveEnd] =
     startDate && endDate && startDate <= endDate
@@ -181,6 +213,69 @@ export default function UploadPage(): React.ReactElement {
   const handleCancelSync = useCallback((): void => {
     syncCancelledRef.current = true;
   }, []);
+
+  const handleLoadDynamo = useCallback(async (): Promise<void> => {
+    setDynamoLoading(true);
+    setDynamoResult(null);
+    setDynamoError(null);
+    try {
+      const res = await fetchDatamappingAndIngest({ sinceDate: dynamoSinceDate });
+      setDynamoResult({
+        inserted: res.inserted,
+        updated: res.updated,
+        batchCount: res.batchCount,
+      });
+    } catch (err) {
+      setDynamoError(err instanceof Error ? err.message : "Error al cargar DynamoDB");
+    } finally {
+      setDynamoLoading(false);
+    }
+  }, [fetchDatamappingAndIngest, dynamoSinceDate]);
+
+  const handleDynamoExtractAllJanuary = useCallback(async (): Promise<void> => {
+    setDynamoExtractAllRunning(true);
+    setDynamoError(null);
+    const year = 2026;
+    const month = 1;
+    for (let day = 1; day <= 31; day++) {
+      setDynamoExtractCurrentDay(day);
+      setDynamoByDayStatus((prev) => ({ ...prev, [day]: "loading" }));
+      try {
+        const res = await fetchDatamappingForDay({ year, month, day });
+        setDynamoByDayStatus((prev) => ({ ...prev, [day]: "done" }));
+        setDynamoByDayResult((prev) => ({
+          ...prev,
+          [day]: { inserted: res.inserted, updated: res.updated },
+        }));
+      } catch (err) {
+        setDynamoByDayStatus((prev) => ({ ...prev, [day]: "error" }));
+        setDynamoError(
+          err instanceof Error ? err.message : `Error día ${day}`
+        );
+      }
+    }
+    setDynamoExtractCurrentDay(0);
+    setDynamoExtractAllRunning(false);
+  }, [fetchDatamappingForDay]);
+
+  const handleDeleteDynamo = useCallback(async (): Promise<void> => {
+    setDynamoDeleting(true);
+    setDynamoResult(null);
+    setDynamoError(null);
+    try {
+      let totalDeleted = 0;
+      while (true) {
+        const res = await deleteDatamappingBatch({});
+        totalDeleted += res.deleted;
+        if (res.deleted === 0) break;
+      }
+      setDynamoDeleteDialogOpen(false);
+    } catch (err) {
+      setDynamoError(err instanceof Error ? err.message : "Error al borrar");
+    } finally {
+      setDynamoDeleting(false);
+    }
+  }, [deleteDatamappingBatch]);
 
   const handleDeleteAll = useCallback(async (): Promise<void> => {
     setDeleting(true);
@@ -402,6 +497,156 @@ export default function UploadPage(): React.ReactElement {
               </Button>
             </div>
           </div>
+        </div>
+
+        {/* Carga desde DynamoDB (reconciliación datamapping) */}
+        <div className="glass-card rounded-xl p-6 space-y-4">
+          <h2 className="text-lg font-semibold flex items-center gap-2 flex-wrap">
+            <Database className="size-5" />
+            Carga desde DynamoDB
+            <Link
+              href="/reconcile/january-2026"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-sm font-normal text-emerald-400 hover:text-emerald-300 ml-auto"
+            >
+              Reconciliar Enero 2026 →
+            </Link>
+          </h2>
+          <p className="text-sm text-muted-foreground">
+            Consulta la tabla de datamapping (backup Prod) por GSI DateIndex:
+            registros con <code className="text-xs bg-muted px-1 rounded">status = PAGO VALIDADO</code> y{" "}
+            <code className="text-xs bg-muted px-1 rounded">updatedAt</code> posterior a la fecha. Se guardan en{" "}
+            <code className="text-xs bg-muted px-1 rounded">datamappingRecords</code> para reconciliar con CloudWatch.
+          </p>
+          <div className="flex flex-wrap gap-4 items-end">
+            <div className="flex flex-col gap-1">
+              <label className="text-xs text-muted-foreground">
+                updatedAt posterior a (fecha)
+              </label>
+              <input
+                type="date"
+                value={dynamoSinceDate}
+                onChange={(e) => setDynamoSinceDate(e.target.value)}
+                className="bg-slate-800 border border-slate-600 rounded px-3 py-2 text-sm"
+              />
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <Button
+                size="sm"
+                onClick={handleLoadDynamo}
+                disabled={dynamoLoading || syncing}
+                className="gap-2 bg-amber-600 hover:bg-amber-700"
+              >
+                {dynamoLoading ? (
+                  <>
+                    <Loader2 className="size-3.5 animate-spin" />
+                    Cargando...
+                  </>
+                ) : (
+                  <>
+                    <Database className="size-3.5" />
+                    Cargar desde DynamoDB
+                  </>
+                )}
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setDynamoDeleteDialogOpen(true)}
+                disabled={dynamoLoading || dynamoDeleting || syncing}
+                className="gap-2 bg-white/3 border-border/50 text-red-400 hover:text-red-300"
+              >
+                {dynamoDeleting ? (
+                  <Loader2 className="size-3.5 animate-spin" />
+                ) : (
+                  <Trash2 className="size-3.5" />
+                )}
+                Borrar datos DynamoDB
+              </Button>
+            </div>
+          </div>
+          {dynamoResult && !dynamoLoading && (
+            <div className="rounded-lg bg-emerald-500/10 border border-emerald-500/30 p-4 text-sm text-emerald-400">
+              <p className="font-medium">Carga completada</p>
+              <p className="mt-1">
+                Insertados: {dynamoResult.inserted} · Actualizados:{" "}
+                {dynamoResult.updated} · Lotes: {dynamoResult.batchCount}.
+              </p>
+            </div>
+          )}
+
+          <div className="border-t border-slate-700/50 pt-4 mt-4">
+            <h3 className="text-sm font-semibold mb-2">
+              Extracción por día (Enero 2026, ~70k registros)
+            </h3>
+            <p className="text-xs text-muted-foreground mb-3">
+              Extrae por día (updatedAt en ese día). Los registros existentes se
+              re-escriben (upsert por referencia + updatedAt), no se borran.
+            </p>
+            <Button
+              size="sm"
+              onClick={handleDynamoExtractAllJanuary}
+              disabled={
+                dynamoExtractAllRunning ||
+                dynamoLoading ||
+                syncing
+              }
+              className="gap-2 bg-amber-600 hover:bg-amber-700 mb-3"
+            >
+              {dynamoExtractAllRunning ? (
+                <>
+                  <Loader2 className="size-3.5 animate-spin" />
+                  Día {dynamoExtractCurrentDay} de 31...
+                </>
+              ) : (
+                <>
+                  <Database className="size-3.5" />
+                  Extraer todo enero 2026 por día
+                </>
+              )}
+            </Button>
+            <div className="flex flex-wrap gap-1.5">
+              {Array.from({ length: 31 }, (_, i) => i + 1).map((day) => {
+                const status = dynamoByDayStatus[day];
+                const result = dynamoByDayResult[day];
+                return (
+                  <div
+                    key={day}
+                    className={`
+                      flex flex-col items-center justify-center w-9 h-9 rounded border text-xs
+                      ${
+                        status === "done"
+                          ? "bg-emerald-500/20 border-emerald-500/50 text-emerald-400"
+                          : status === "loading"
+                            ? "bg-amber-500/20 border-amber-500/50 text-amber-400"
+                            : status === "error"
+                              ? "bg-destructive/20 border-destructive/50 text-destructive"
+                              : "bg-slate-800/50 border-slate-600 text-muted-foreground"
+                      }
+                    `}
+                    title={
+                      result
+                        ? `Día ${day}: +${result.inserted} ins, ${result.updated} act`
+                        : `Día ${day}: ${status}`
+                    }
+                  >
+                    <span>{day}</span>
+                    {result && (
+                      <span className="text-[10px] opacity-80">
+                        {result.inserted + result.updated}
+                      </span>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+          {dynamoError && !dynamoLoading && (
+            <div className="rounded-lg bg-destructive/10 border border-destructive/30 p-4 text-sm text-destructive">
+              {dynamoError}
+            </div>
+          )}
         </div>
 
         {/* Registros Cargados - grilla de meses */}
@@ -763,6 +1008,41 @@ export default function UploadPage(): React.ReactElement {
         startDate={startDate}
         endDate={endDate}
       />
+
+      <Dialog
+        open={dynamoDeleteDialogOpen}
+        onOpenChange={setDynamoDeleteDialogOpen}
+      >
+        <DialogContent className="glass-card-elevated border-border/50">
+          <DialogHeader>
+            <DialogTitle>Borrar datos DynamoDB</DialogTitle>
+            <DialogDescription>
+              Se eliminarán todos los registros de la tabla{" "}
+              <code className="text-xs">datamappingRecords</code>. Puedes volver
+              a cargar desde DynamoDB cuando quieras.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button
+              variant="destructive"
+              onClick={handleDeleteDynamo}
+              disabled={dynamoDeleting}
+              size="sm"
+            >
+              {dynamoDeleting ? "Eliminando..." : "Eliminar"}
+            </Button>
+            <Button
+              variant="outline"
+              onClick={() => setDynamoDeleteDialogOpen(false)}
+              disabled={dynamoDeleting}
+              size="sm"
+              className="bg-white/3 border-border/50"
+            >
+              Cancelar
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <Dialog
         open={deleteMonthDialogOpen}

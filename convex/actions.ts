@@ -2,6 +2,7 @@
 
 import { action } from "./_generated/server";
 import { api } from "./_generated/api";
+import type { Id } from "./_generated/dataModel";
 import { v } from "convex/values";
 
 /** Límite Convex: 600 segundos por acción. */
@@ -14,6 +15,13 @@ import {
 } from "@aws-sdk/client-cloudwatch-logs";
 import { parseV1V2, parsePayment } from "./lib/parsers";
 import { normalizeWithConfig } from "./movementCodes";
+import {
+  queryDatamappingPagoValidadoSince,
+  queryDatamappingPagoValidadoForDay,
+  mapDynamoItemToRecord,
+  listFirstItemAttributes,
+} from "./lib/dynamodb";
+import { timestampToMexicoMonth } from "./lib/mexicoDate";
 
 const LOG_GROUPS = {
   v1: process.env.CLOUDWATCH_LOG_GROUP_V1!,
@@ -49,7 +57,8 @@ async function fetchCloudWatch(
 | sort @timestamp desc
 | limit 10000`
       : `fields @timestamp, @message
-| filter @message like /Preparar Datos/ and @message like /TaskStateEntered/
+| filter @message like /TaskStateExited/ and @message like /Preparar Datos/
+| filter @message not like /"output":"null"/
 | sort @timestamp desc
 | limit 10000`;
 
@@ -126,7 +135,8 @@ export const fetchAndIngestForDate = action({
       importDate: string;
     };
     const byRef = new Map<string, { logSource: string; rec: Rec }>();
-    // Prioridad: payment > v2 > v1 (menor número = mayor prioridad)
+    // Prioridad: Payment (PAGO VALIDADO) > V2 > V1
+    // Si está en Payment es PAGO VALIDADO; si está en V1/V2 es exitoso (trámite encontrado en DB)
     const order = { payment: 0, v2: 1, v1: 2 };
 
     // Fetch las 3 fuentes en paralelo para respetar límite Convex de 600s por acción
@@ -276,6 +286,453 @@ export const fetchAndIngestForDate = action({
       totalRecords: records.length,
       inserted: totalInserted,
       skipped: totalSkipped,
+    };
+  },
+});
+
+const DATAMAPPING_INGEST_BATCH = 150;
+
+/** Consulta DynamoDB GSI DateIndex (syncGroup=1, updatedAt > sinceDate, status=PAGO VALIDADO) y upserta en datamappingRecords. */
+export const fetchDatamappingAndIngest = action({
+  args: { sinceDate: v.string() },
+  handler: async (ctx, { sinceDate }) => {
+    const startTime = Date.now();
+    let inserted = 0;
+    let updated = 0;
+    let batchCount = 0;
+    type DatamappingRec = {
+      referencia: string;
+      monto: number;
+      fechaPago?: string;
+      fuente?: string;
+      urlPago?: string;
+      tipoMovimiento?: string;
+      updatedAt: string;
+      rawJson: string;
+    };
+    const batch: DatamappingRec[] = [];
+
+    for await (const item of queryDatamappingPagoValidadoSince(sinceDate)) {
+      if (Date.now() - startTime > ACTION_TIME_LIMIT_MS) break;
+      batch.push(mapDynamoItemToRecord(item as Record<string, unknown>));
+      if (batch.length >= DATAMAPPING_INGEST_BATCH) {
+        const result = (await ctx.runMutation(
+          api.mutations.upsertDatamappingBatch,
+          { records: batch }
+        )) as { inserted: number; updated: number };
+        inserted += result.inserted;
+        updated += result.updated;
+        batchCount += 1;
+        batch.length = 0;
+      }
+    }
+    if (batch.length > 0) {
+      const result = (await ctx.runMutation(
+        api.mutations.upsertDatamappingBatch,
+        { records: batch }
+      )) as { inserted: number; updated: number };
+      inserted += result.inserted;
+      updated += result.updated;
+      batchCount += 1;
+    }
+    return { inserted, updated, batchCount };
+  },
+});
+
+/** Extrae un solo día de DynamoDB (updatedAt en ese día) y upserta en datamappingRecords. */
+export const fetchDatamappingForDay = action({
+  args: {
+    year: v.number(),
+    month: v.number(),
+    day: v.number(),
+  },
+  handler: async (ctx, { year, month, day }) => {
+    let inserted = 0;
+    let updated = 0;
+    let batchCount = 0;
+    type DatamappingRec = {
+      referencia: string;
+      monto: number;
+      fechaPago?: string;
+      fuente?: string;
+      urlPago?: string;
+      tipoMovimiento?: string;
+      updatedAt: string;
+      rawJson: string;
+    };
+    const batch: DatamappingRec[] = [];
+
+    for await (const item of queryDatamappingPagoValidadoForDay(
+      year,
+      month,
+      day
+    )) {
+      batch.push(mapDynamoItemToRecord(item as Record<string, unknown>));
+      if (batch.length >= DATAMAPPING_INGEST_BATCH) {
+        const result = (await ctx.runMutation(
+          api.mutations.upsertDatamappingBatch,
+          { records: batch }
+        )) as { inserted: number; updated: number };
+        inserted += result.inserted;
+        updated += result.updated;
+        batchCount += 1;
+        batch.length = 0;
+      }
+    }
+    if (batch.length > 0) {
+      const result = (await ctx.runMutation(
+        api.mutations.upsertDatamappingBatch,
+        { records: batch }
+      )) as { inserted: number; updated: number };
+      inserted += result.inserted;
+      updated += result.updated;
+      batchCount += 1;
+    }
+    return { inserted, updated, batchCount, day };
+  },
+});
+
+/** Explora DynamoDB: devuelve las keys del primer item con status PAGO VALIDADO y updatedAt > sinceDate (para confirmar nombres de atributos). */
+export const exploreDatamappingAttributes = action({
+  args: { sinceDate: v.string() },
+  handler: async (_ctx, { sinceDate }) => {
+    return listFirstItemAttributes(sinceDate);
+  },
+});
+
+const JAN_2026_RECONCILIATION_MONTH = "2026-01";
+/** Enero 2026 en México (UTC-6): [1 ene 00:00, 1 feb 00:00) = [2026-01-01T06:00Z, 2026-02-01T06:00Z). */
+const JAN_2026_START = "2026-01-01T06:00:00.000Z";
+const JAN_2026_END = "2026-02-01T06:00:00.000Z";
+const JAN_2026_CW_PAGE = 5000;
+const JAN_2026_DDB_PAGE = 500;
+
+/**
+ * Reconciliación Enero 2026 (~70k): solo lee datos ya en Convex.
+ * Usa paymentRecords (origen CloudWatch) y datamappingRecords (origen DynamoDB PAGO VALIDADO).
+ * No llama a AWS; paginado para no exceder límites de lectura/tiempo de Convex.
+ */
+export const getJanuary2026Reconciliation = action({
+  args: {},
+  handler: async (ctx) => {
+    const startMs = Date.now();
+
+    const byRefCw = new Map<
+      string,
+      { monto: number; logSource: "payment" | "v1" | "v2"; importMonth: string }
+    >();
+    const order: Record<string, number> = { payment: 0, v2: 1, v1: 2 };
+    let cwTotalRecords = 0;
+    let cwCursor: string | null = null;
+
+    do {
+      if (Date.now() - startMs > ACTION_TIME_LIMIT_MS) {
+        throw new Error(
+          "Límite de tiempo alcanzado. Reconciliación Enero 2026 incompleta."
+        );
+      }
+      const cwResult = (await ctx.runQuery(
+        api.queries.getPaymentRecordsPageWithDetails,
+        {
+          month: JAN_2026_RECONCILIATION_MONTH,
+          cursor: cwCursor ?? undefined,
+          numItems: JAN_2026_CW_PAGE,
+        }
+      )) as {
+        page: Array<{
+          referencia: string;
+          monto: number;
+          logSource: string;
+          importMonth?: string;
+        }>;
+        isDone: boolean;
+        continueCursor: string | null;
+      };
+      cwTotalRecords += cwResult.page.length;
+      for (const r of cwResult.page) {
+        const existing = byRefCw.get(r.referencia);
+        if (
+          !existing ||
+          order[r.logSource] < order[existing.logSource as keyof typeof order]
+        ) {
+          byRefCw.set(r.referencia, {
+            monto: r.monto,
+            logSource: r.logSource as "payment" | "v1" | "v2",
+            importMonth: r.importMonth ?? "",
+          });
+        }
+      }
+      if (cwResult.isDone) break;
+      cwCursor = cwResult.continueCursor ?? null;
+    } while (true);
+
+    const bySource = { payment: 0, v1: 0, v2: 0 };
+    for (const [, { logSource }] of byRefCw) {
+      bySource[logSource]++;
+    }
+
+    const byRefDdb = new Map<string, { monto: number; updatedAt: string }>();
+    let ddbTotalRecords = 0;
+    let ddbCursor: string | null = null;
+
+    do {
+      if (Date.now() - startMs > ACTION_TIME_LIMIT_MS) {
+        throw new Error(
+          "Límite de tiempo alcanzado. Reconciliación Enero 2026 incompleta."
+        );
+      }
+      const ddbResult = (await ctx.runQuery(
+        api.queries.getJanuary2026DatamappingPage,
+        { cursor: ddbCursor, numItems: JAN_2026_DDB_PAGE }
+      )) as {
+        page: Array<{ referencia: string; monto: number; updatedAt: string }>;
+        isDone: boolean;
+        continueCursor: string | null;
+      };
+      ddbTotalRecords += ddbResult.page.length;
+      for (const r of ddbResult.page) {
+        byRefDdb.set(r.referencia, { monto: r.monto, updatedAt: r.updatedAt });
+      }
+      if (ddbResult.isDone) break;
+      ddbCursor = ddbResult.continueCursor ?? null;
+    } while (true);
+
+    const onlyInCloudWatch: string[] = [];
+    const onlyInDynamoDB: string[] = [];
+    const inBothMatch: Array<{ referencia: string; monto: number }> = [];
+    const inBothMonthMismatch: Array<{
+      referencia: string;
+      monto: number;
+      importMonth: string;
+      datamappingUpdatedAt: string;
+      logSource: string;
+    }> = [];
+    const inBothMismatch: Array<{
+      referencia: string;
+      montoCloudWatch: number;
+      montoDynamoDB: number;
+      logSource: string;
+    }> = [];
+
+    for (const [ref, { monto, logSource, importMonth }] of byRefCw) {
+      if (!byRefDdb.has(ref)) {
+        onlyInCloudWatch.push(ref);
+      } else {
+        const ddb = byRefDdb.get(ref)!;
+        const cwMonth = (importMonth ?? "").substring(0, 7); // ya en hora México (parsers)
+        const ddbMonth = timestampToMexicoMonth(ddb.updatedAt ?? ""); // UTC → México UTC-6
+        const sameMonth = cwMonth !== "" && ddbMonth !== "" && cwMonth === ddbMonth;
+        if (monto === ddb.monto) {
+          if (sameMonth) {
+            inBothMatch.push({ referencia: ref, monto });
+          } else {
+            inBothMonthMismatch.push({
+              referencia: ref,
+              monto,
+              importMonth: importMonth ?? "",
+              datamappingUpdatedAt: ddb.updatedAt,
+              logSource,
+            });
+          }
+        } else {
+          inBothMismatch.push({
+            referencia: ref,
+            montoCloudWatch: monto,
+            montoDynamoDB: ddb.monto,
+            logSource,
+          });
+        }
+      }
+    }
+    for (const [ref] of byRefDdb) {
+      if (!byRefCw.has(ref)) onlyInDynamoDB.push(ref);
+    }
+
+    // Excluir de "Solo en Datamapping" las refs que sí están en CloudWatch (otro mes) → pasan a monthMismatch
+    const LOOKUP_CHUNK = 300;
+    let onlyInDynamoDBFiltered = onlyInDynamoDB;
+    if (onlyInDynamoDB.length > 0) {
+      const cwMonthsByRef: Record<string, string> = {};
+      for (let i = 0; i < onlyInDynamoDB.length; i += LOOKUP_CHUNK) {
+        const chunk = onlyInDynamoDB.slice(i, i + LOOKUP_CHUNK);
+        const part = (await ctx.runQuery(
+          api.queries.getPaymentRecordsMonthsForReferencias,
+          { referencias: chunk }
+        )) as Record<string, string>;
+        Object.assign(cwMonthsByRef, part);
+      }
+      for (const ref of Object.keys(cwMonthsByRef)) {
+        const ddb = byRefDdb.get(ref)!;
+        inBothMonthMismatch.push({
+          referencia: ref,
+          monto: ddb.monto,
+          importMonth: cwMonthsByRef[ref] ?? "",
+          datamappingUpdatedAt: ddb.updatedAt,
+          logSource: "",
+        });
+      }
+      onlyInDynamoDBFiltered = onlyInDynamoDB.filter((ref) => !(ref in cwMonthsByRef));
+    }
+
+    // Excluir de "Solo en CloudWatch" las refs que sí están en Datamapping (otro mes) → pasan a monthMismatch
+    let onlyInCloudWatchFiltered = onlyInCloudWatch;
+    if (onlyInCloudWatch.length > 0) {
+      const ddbUpdatedAtByRef: Record<string, string> = {};
+      for (let i = 0; i < onlyInCloudWatch.length; i += LOOKUP_CHUNK) {
+        const chunk = onlyInCloudWatch.slice(i, i + LOOKUP_CHUNK);
+        const part = (await ctx.runQuery(
+          api.queries.getDatamappingUpdatedAtForReferencias,
+          { referencias: chunk }
+        )) as Record<string, string>;
+        Object.assign(ddbUpdatedAtByRef, part);
+      }
+      for (const ref of Object.keys(ddbUpdatedAtByRef)) {
+        const cw = byRefCw.get(ref)!;
+        inBothMonthMismatch.push({
+          referencia: ref,
+          monto: cw.monto,
+          importMonth: cw.importMonth ?? "",
+          datamappingUpdatedAt: ddbUpdatedAtByRef[ref] ?? "",
+          logSource: cw.logSource,
+        });
+      }
+      onlyInCloudWatchFiltered = onlyInCloudWatch.filter((ref) => !(ref in ddbUpdatedAtByRef));
+    }
+
+    const onlyCwBySource = { payment: 0, v1: 0, v2: 0 };
+    for (const ref of onlyInCloudWatchFiltered) {
+      const s = byRefCw.get(ref)?.logSource;
+      if (s) onlyCwBySource[s]++;
+    }
+
+    const totalUnique = byRefCw.size + onlyInDynamoDBFiltered.length; // refs únicas en total considerando ambos lados
+    const matchCount = inBothMatch.length;
+    const onlyCwCount = onlyInCloudWatchFiltered.length;
+    const onlyDdbCount = onlyInDynamoDBFiltered.length;
+    const mismatchCount = inBothMismatch.length;
+    const monthMismatchCount = inBothMonthMismatch.length;
+
+    // Limpiar tablas de errores (llamar mutation en loop)
+    let cleared: { deleted: number };
+    do {
+      cleared = (await ctx.runMutation(
+        api.mutations.clearReconciliationJanuary2026Batch,
+        {}
+      )) as { deleted: number };
+    } while (cleared.deleted >= 400);
+    // Escribir resumen
+    await ctx.runMutation(api.mutations.setReconciliationSummaryJanuary2026, {
+      matchCount,
+      onlyCwCount,
+      onlyDdbCount,
+      mismatchCount,
+      monthMismatchCount,
+      totalUnique: byRefCw.size + byRefDdb.size,
+    });
+    // Insertar errores en lotes
+    const BATCH = 400;
+    const onlyCwRecords = onlyInCloudWatchFiltered.map((ref) => {
+      const x = byRefCw.get(ref)!;
+      return {
+        kind: "onlyCw" as const,
+        referencia: ref,
+        monto: x.monto,
+        logSource: x.logSource,
+        importMonth: x.importMonth || undefined,
+      };
+    });
+    const onlyDdbRecords = onlyInDynamoDBFiltered.map((ref) => {
+      const d = byRefDdb.get(ref)!;
+      return {
+        kind: "onlyDdb" as const,
+        referencia: ref,
+        monto: d.monto,
+        datamappingUpdatedAt: d.updatedAt,
+      };
+    });
+    const mismatchRecords = inBothMismatch.map((r) => {
+      const cw = byRefCw.get(r.referencia)!;
+      const ddb = byRefDdb.get(r.referencia)!;
+      return {
+        kind: "mismatch" as const,
+        referencia: r.referencia,
+        montoCloudWatch: r.montoCloudWatch,
+        montoDynamoDB: r.montoDynamoDB,
+        logSource: r.logSource,
+        importMonth: cw.importMonth || undefined,
+        datamappingUpdatedAt: ddb.updatedAt,
+      };
+    });
+    const monthMismatchRecords = inBothMonthMismatch.map((r) => ({
+      kind: "monthMismatch" as const,
+      referencia: r.referencia,
+      monto: r.monto,
+      logSource: r.logSource,
+      importMonth: r.importMonth || undefined,
+      datamappingUpdatedAt: r.datamappingUpdatedAt,
+    }));
+    for (let i = 0; i < onlyCwRecords.length; i += BATCH) {
+      await ctx.runMutation(api.mutations.insertReconciliationErrorsBatch, {
+        records: onlyCwRecords.slice(i, i + BATCH),
+      });
+    }
+    for (let i = 0; i < onlyDdbRecords.length; i += BATCH) {
+      await ctx.runMutation(api.mutations.insertReconciliationErrorsBatch, {
+        records: onlyDdbRecords.slice(i, i + BATCH),
+      });
+    }
+    for (let i = 0; i < mismatchRecords.length; i += BATCH) {
+      await ctx.runMutation(api.mutations.insertReconciliationErrorsBatch, {
+        records: mismatchRecords.slice(i, i + BATCH),
+      });
+    }
+    for (let i = 0; i < monthMismatchRecords.length; i += BATCH) {
+      await ctx.runMutation(api.mutations.insertReconciliationErrorsBatch, {
+        records: monthMismatchRecords.slice(i, i + BATCH),
+      });
+    }
+
+    return {
+      month: JAN_2026_RECONCILIATION_MONTH,
+      cloudWatch: {
+        totalRecords: cwTotalRecords,
+        uniqueReferencias: byRefCw.size,
+        bySourceRecords: bySource,
+        bySourceUniqueRefs: {
+          payment: bySource.payment,
+          v1: bySource.v1,
+          v2: bySource.v2,
+        },
+      },
+      datamapping: {
+        totalRecords: ddbTotalRecords,
+        uniqueReferencias: byRefDdb.size,
+        filter: { updatedAtFrom: JAN_2026_START, updatedAtTo: JAN_2026_END },
+        truncated: false,
+      },
+      differences: {
+        onlyInCloudWatch: onlyCwCount,
+        onlyInDynamoDB: onlyDdbCount,
+        inBothMatch: matchCount,
+        inBothMismatch: mismatchCount,
+        inBothMonthMismatch: monthMismatchCount,
+        onlyInCloudWatchBySource: onlyCwBySource,
+      },
+      summary: {
+        matchCount,
+        onlyCwCount,
+        onlyDdbCount,
+        mismatchCount,
+        monthMismatchCount,
+        totalUnique: byRefCw.size + byRefDdb.size,
+      },
+      samples: {
+        onlyInCloudWatch: onlyInCloudWatchFiltered.slice(0, 100),
+        onlyInDynamoDB: onlyInDynamoDBFiltered.slice(0, 100),
+        inBothMismatch: inBothMismatch.slice(0, 50),
+        inBothMonthMismatch: inBothMonthMismatch.slice(0, 50),
+        inBothMatch: inBothMatch.slice(0, 30),
+      },
     };
   },
 });
@@ -804,6 +1261,721 @@ export const diagnoseAllMonths = action({
       })),
       allResults: results,
     };
+  },
+});
+
+/**
+ * Elimina datos de febrero 2026 del día 9 en adelante (aún no han ocurrido).
+ * Borra paymentRecords, regenera monthStats y agregados (dailyData, etc.).
+ */
+export const trimFebruary2026FutureData = action({
+  args: {},
+  handler: async (ctx) => {
+    const month = "2026-02";
+    const minDateToDelete = "2026-02-09";
+    const PAGE_SIZE = 500;
+    const BATCH_DELETE = 400;
+    let cursor: string | null = null;
+    let totalDeleted = 0;
+
+    // 1. Eliminar paymentRecords con fechaTransaccion >= 2026-02-09
+    while (true) {
+      const result = (await ctx.runQuery(
+        api.queries.getPaymentsByMonthPaginated,
+        {
+          month,
+          paginationOpts: { numItems: PAGE_SIZE, cursor },
+        }
+      )) as {
+        page: Array<{ _id: Id<"paymentRecords">; fechaTransaccion: string }>;
+        isDone: boolean;
+        continueCursor: string | null;
+      };
+
+      const toDelete = result.page
+        .filter((r) => r.fechaTransaccion >= minDateToDelete)
+        .map((r) => r._id);
+
+      for (let i = 0; i < toDelete.length; i += BATCH_DELETE) {
+        const batch = toDelete.slice(i, i + BATCH_DELETE);
+        const res = await ctx.runMutation(api.mutations.deletePaymentsByIds, {
+          ids: batch,
+        });
+        totalDeleted += res.deleted;
+      }
+
+      if (result.isDone) break;
+      cursor = result.continueCursor;
+    }
+
+    // 2. Regenerar monthStats desde paymentRecords
+    await ctx.runAction(api.actions.recreateMonthStatsFromPaymentRecords, {
+      month,
+    });
+
+    // 3. Regenerar agregados (dailyData, rawHourlyData, etc.)
+    await ctx.runAction(api.januaryETL.buildJanuaryAggregates, {
+      months: [month],
+    });
+
+    return {
+      paymentRecordsDeleted: totalDeleted,
+      monthStatsRegenerated: true,
+      aggregatesRegenerated: true,
+    };
+  },
+});
+
+function isPagado(estatus: string): boolean {
+  const u = (estatus ?? "").toUpperCase().trim();
+  return u === "PAGADO" || u === "PAGO VALIDADO" || u === "PA";
+}
+
+/**
+ * Referencias de un mes que exceden un monto mínimo y tienen estatus PAGADO (PAGO VALIDADO).
+ */
+
+/**
+ * Diagnóstico: distribución V1/V2/payment por día para Marzo 2024 y 2025.
+ * Ayuda a detectar si solo un día tiene V1 (p. ej. sospecha de fecha incorrecta).
+ */
+export const diagnoseMarchV1Distribution = action({
+  args: {},
+  handler: async (ctx) => {
+    const months = ["2024-03", "2025-03", "2025-04"];
+    const results: Array<{
+      month: string;
+      totalV1: number;
+      totalV2: number;
+      totalPayment: number;
+      daysWithV1: Array<{ date: string; v1: number; v2: number; payment: number }>;
+      allDays: Array<{ date: string; v1: number; v2: number; payment: number }>;
+    }> = [];
+
+    for (const month of months) {
+      const doc = await ctx.runQuery(api.queries.getMonthStats, { month });
+      const breakdown = doc?.dailyBreakdown as { days?: Array<{ date: string; v1: number; v2: number; payment: number }> } | undefined;
+      const entries = breakdown?.days ?? [];
+
+      const daysWithV1 = entries.filter((d) => d.v1 > 0);
+      const totalV1 = entries.reduce((s, d) => s + (d.v1 ?? 0), 0);
+      const totalV2 = entries.reduce((s, d) => s + (d.v2 ?? 0), 0);
+      const totalPayment = entries.reduce((s, d) => s + (d.payment ?? 0), 0);
+
+      results.push({
+        month,
+        totalV1,
+        totalV2,
+        totalPayment,
+        daysWithV1: daysWithV1.map((d) => ({ date: d.date, v1: d.v1, v2: d.v2 ?? 0, payment: d.payment ?? 0 })),
+        allDays: entries.slice(0, 35).map((d) => ({ date: d.date, v1: d.v1 ?? 0, v2: d.v2 ?? 0, payment: d.payment ?? 0 })),
+      });
+    }
+
+    // También verificar paymentRecords directamente (puede diferir de monthStats)
+    const byMonthFromRecords: Record<string, Map<string, { v1: number; v2: number; payment: number }>> = {};
+    for (const month of months) {
+      const byDay = new Map<string, { v1: number; v2: number; payment: number }>();
+      let cursor: string | undefined;
+      do {
+        const result = await ctx.runQuery(api.queries.getPaymentRecordsPageWithDetails, {
+          month,
+          cursor,
+          numItems: 5000,
+        });
+        for (const r of result.page) {
+          const dateStr = r.importDate ?? "";
+          if (!dateStr) continue;
+          const cur = byDay.get(dateStr) ?? { v1: 0, v2: 0, payment: 0 };
+          if (r.logSource === "v1") cur.v1 += 1;
+          else if (r.logSource === "v2") cur.v2 += 1;
+          else cur.payment += 1;
+          byDay.set(dateStr, cur);
+        }
+        if (result.isDone) break;
+        cursor = result.continueCursor;
+      } while (cursor);
+      byMonthFromRecords[month] = byDay;
+    }
+
+    return {
+      fromMonthStats: results,
+      fromPaymentRecords: Object.fromEntries(
+        months.map((m) => [
+          m,
+          {
+            daysWithV1: Array.from(byMonthFromRecords[m]?.entries() ?? [])
+              .filter(([, v]) => v.v1 > 0)
+              .map(([date, v]) => ({ date, ...v }))
+              .sort((a, b) => a.date.localeCompare(b.date)),
+            totalV1: Array.from(byMonthFromRecords[m]?.values() ?? []).reduce((s, v) => s + v.v1, 0),
+          },
+        ])
+      ),
+    };
+  },
+});
+
+/**
+ * Diagnóstico V1 Marzo 2025: referencias procesadas vs encontradas (sin considerar Payment).
+ * - TaskStateEntered: todas las referencias que entraron al workflow
+ * - TaskStateExited (output != null): referencias encontradas en DB
+ * - Con y sin deduplicación
+ */
+export const diagnoseV1March2025ProcessedVsFound = action({
+  args: {},
+  handler: async (ctx) => {
+    const month = "2025-03";
+    const [year, mon] = month.split("-").map(Number);
+
+    const allRefsEntered = new Set<string>();
+    const allRefsFound = new Set<string>();
+    let totalEventsEntered = 0;
+    let totalEventsFound = 0;
+    let totalRefsEnteredRaw = 0;
+    let totalRefsFoundRaw = 0;
+
+    const extractReferencias = (msgStr: string): string[] => {
+      const refs: string[] = [];
+      try {
+        const msg = JSON.parse(msgStr) as Record<string, unknown>;
+        const details = msg?.details as Record<string, unknown> | undefined;
+        if (!details) return refs;
+
+        const extractFromObj = (obj: unknown): void => {
+          if (!obj || typeof obj !== "object") return;
+          const r = obj as Record<string, unknown>;
+          const ref = String(r?.referencia ?? "").trim();
+          if (ref) refs.push(ref);
+          const txns = r.transacciones ?? (r.data as Record<string, unknown> | undefined)?.transacciones ?? (r.payload as Record<string, unknown> | undefined)?.transacciones;
+          if (Array.isArray(txns)) {
+            for (const t of txns) {
+              const tr = t as Record<string, unknown>;
+              const trRef = String(tr?.referencia ?? "").trim();
+              if (trRef) refs.push(trRef);
+            }
+          }
+        };
+
+        const inputStr = details.input;
+        if (typeof inputStr === "string" && inputStr !== "null") {
+          try {
+            const input = JSON.parse(inputStr) as Record<string, unknown>;
+            extractFromObj(input);
+            const txns = input?.transacciones;
+            if (Array.isArray(txns)) {
+              for (const t of txns) extractFromObj(t);
+            }
+          } catch {
+            /* ignore */
+          }
+        }
+
+        const outputStr = details.output;
+        if (typeof outputStr === "string" && outputStr !== "null") {
+          try {
+            const output = JSON.parse(outputStr) as Record<string, unknown>;
+            extractFromObj(output);
+            const data = (output?.data ?? output?.payload) as Record<string, unknown> | undefined;
+            if (data && typeof data === "object") {
+              if (Array.isArray(data.transacciones)) {
+                for (const t of data.transacciones) extractFromObj(t);
+              } else if (data.referencia) refs.push(String(data.referencia).trim());
+            }
+          } catch {
+            /* ignore */
+          }
+          // Output puede ser JSON anidado: buscar referencia en el string
+          if (refs.length === 0 && outputStr.includes("referencia")) {
+            const refMatch = outputStr.match(/"referencia"\s*:\s*"(\d{15,})"/);
+            if (refMatch?.[1]) refs.push(refMatch[1]);
+          }
+        }
+
+        const paramsStr = details.parameters;
+        if (typeof paramsStr === "string") {
+          try {
+            const params = JSON.parse(paramsStr) as { Payload?: Record<string, unknown> };
+            if (params?.Payload?.referencia) refs.push(String(params.Payload.referencia).trim());
+          } catch {
+            /* ignore */
+          }
+        }
+      } catch {
+        /* ignore */
+      }
+      // Fallback: regex para referencias (escapadas o normales)
+      if (refs.length === 0) {
+        const patterns = [
+          /"referencia"\s*:\s*"([^"\\]+)"/g,
+          /\\"referencia\\"\s*:\s*\\"([^"\\]+)\\"/g,
+          /"referencia"\s*:\s*"(\d{18,})"/g,
+        ];
+        for (const re of patterns) {
+          const it = msgStr.matchAll(re);
+          for (const m of it) {
+            const r = (m[1] ?? "").replace(/\\"/g, "").trim();
+            if (r && /^\d{15,}$/.test(r)) refs.push(r);
+          }
+          if (refs.length > 0) break;
+        }
+      }
+      return refs;
+    };
+
+    const runQuery = async (
+      queryStr: string,
+      startSec: number,
+      endSec: number
+    ): Promise<Array<Record<string, string>>> => {
+      const startRes = await client.send(
+        new StartQueryCommand({
+          logGroupName: LOG_GROUPS.v1,
+          startTime: startSec,
+          endTime: endSec,
+          queryString: queryStr,
+        })
+      );
+      if (!startRes.queryId) return [];
+      let status: QueryStatus | undefined = QueryStatus.Running;
+      let raw: Array<Array<{ field?: string; value?: string }>> = [];
+      let attempts = 0;
+      while (status === QueryStatus.Running || status === QueryStatus.Scheduled) {
+        if (attempts >= 90) break;
+        await new Promise((r) => setTimeout(r, 1000));
+        const res = await client.send(new GetQueryResultsCommand({ queryId: startRes.queryId }));
+        status = res.status;
+        attempts++;
+        if (status === QueryStatus.Complete) {
+          raw = res.results || [];
+          break;
+        }
+      }
+      return raw.map((row) => {
+        const o: Record<string, string> = {};
+        for (const f of row) {
+          if (f.field && f.value) o[f.field] = f.value;
+        }
+        return o;
+      });
+    };
+
+    const qEntered = `fields @timestamp, @message
+| filter @message like /Preparar Datos/ and @message like /TaskStateEntered/
+| sort @timestamp desc
+| limit 10000`;
+
+    const qFound = `fields @timestamp, @message
+| filter @message like /TaskStateExited/ and @message like /Preparar Datos/
+| filter @message not like /"output":"null"/
+| sort @timestamp desc
+| limit 10000`;
+
+    // Día por día para evitar límite 10k
+    const daysInMonth = new Date(year, mon, 0).getDate();
+    for (let d = 1; d <= daysInMonth; d++) {
+      const startUtc = new Date(Date.UTC(year, mon - 1, d, 6, 0, 0, 0));
+      const endUtc = new Date(Date.UTC(year, mon - 1, d + 1, 5, 59, 59, 999));
+      const startSec = Math.floor(startUtc.getTime() / 1000);
+      const endSec = Math.floor(endUtc.getTime() / 1000);
+
+      const [rowsEntered, rowsFound] = await Promise.all([
+        runQuery(qEntered, startSec, endSec),
+        runQuery(qFound, startSec, endSec),
+      ]);
+
+      for (const row of rowsEntered) {
+        totalEventsEntered++;
+        const refs = extractReferencias(row["@message"] ?? "");
+        for (const ref of refs) {
+          if (ref) {
+            totalRefsEnteredRaw++;
+            allRefsEntered.add(ref);
+          }
+        }
+      }
+      for (const row of rowsFound) {
+        totalEventsFound++;
+        const refs = extractReferencias(row["@message"] ?? "");
+        for (const ref of refs) {
+          if (ref) {
+            totalRefsFoundRaw++;
+            allRefsFound.add(ref);
+          }
+        }
+      }
+    }
+
+    const limitHit = totalEventsEntered >= 10000 || totalEventsFound >= 10000;
+    const refsSoloEntraronNoSalieron = [...allRefsEntered].filter((r) => !allRefsFound.has(r)).length;
+
+    // Cruzar las 6,282 encontradas en V1 con paymentRecords: ¿están en Payment o en V1?
+    const refToSource = new Map<string, "v1" | "v2" | "payment">();
+    let cursor: string | undefined;
+    do {
+      const result = await ctx.runQuery(api.queries.getPaymentRecordsPageWithDetails, {
+        month,
+        cursor,
+        numItems: 5000,
+      });
+      for (const r of result.page) {
+        refToSource.set(r.referencia, r.logSource);
+      }
+      if (result.isDone) break;
+      cursor = result.continueCursor;
+    } while (cursor);
+
+    const v1FoundEnPayment = [...allRefsFound].filter((r) => refToSource.get(r) === "payment").length;
+    const v1FoundEnV1 = [...allRefsFound].filter((r) => refToSource.get(r) === "v1").length;
+    const v1FoundEnV2 = [...allRefsFound].filter((r) => refToSource.get(r) === "v2").length;
+    const v1FoundNoEnConvex = [...allRefsFound].filter((r) => !refToSource.has(r)).length;
+
+    return {
+      month,
+      description: "V1 únicamente, sin considerar Payment",
+      nota: limitHit ? "Límite CloudWatch 10000: conteos pueden estar truncados" : undefined,
+      workflow: {
+        referenciasEncontradas: allRefsFound.size,
+        referenciasNoEncontradas: refsSoloEntraronNoSalieron,
+        totalProcesadas: allRefsEntered.size,
+        pctEncontradas: allRefsEntered.size > 0 ? ((allRefsFound.size / allRefsEntered.size) * 100).toFixed(1) + "%" : "N/A",
+      },
+      v1FoundEnConvex: {
+        enPayment: v1FoundEnPayment,
+        enV1: v1FoundEnV1,
+        enV2: v1FoundEnV2,
+        noEnConvex: v1FoundNoEnConvex,
+        total: allRefsFound.size,
+      },
+      taskStateEntered: {
+        totalEvents: totalEventsEntered,
+        referenciasSinDedup: totalRefsEnteredRaw,
+        referenciasConDedup: allRefsEntered.size,
+      },
+      taskStateExitedFound: {
+        totalEvents: totalEventsFound,
+        referenciasSinDedup: totalRefsFoundRaw,
+        referenciasConDedup: allRefsFound.size,
+      },
+    };
+  },
+});
+
+/**
+ * Diagnóstico: compara queries V1 TaskStateEntered vs TaskStateExited para una fecha.
+ * Útil para entender por qué V1 devuelve 0 pagos en marzo.
+ */
+export const diagnoseV1QueryVariants = action({
+  args: { date: v.string() },
+  handler: async (_ctx, { date }) => {
+    const [y, mo, day] = date.split("-").map(Number);
+    const startUtc = new Date(Date.UTC(y, mo - 1, day, 6, 0, 0, 0));
+    const endUtc = new Date(Date.UTC(y, mo - 1, day + 1, 5, 59, 59, 999));
+    const startTimeSec = Math.floor(startUtc.getTime() / 1000);
+    const endTimeSec = Math.floor(endUtc.getTime() / 1000);
+    const logGroup = LOG_GROUPS.v1;
+
+    async function runQuery(q: string): Promise<number> {
+      const startRes = await client.send(
+        new StartQueryCommand({
+          logGroupName: logGroup,
+          startTime: startTimeSec,
+          endTime: endTimeSec,
+          queryString: q,
+        })
+      );
+      if (!startRes.queryId) return -1;
+      let status: QueryStatus | undefined = QueryStatus.Running;
+      let count = 0;
+      let attempts = 0;
+      while (status === QueryStatus.Running || status === QueryStatus.Scheduled) {
+        if (attempts >= 30) break;
+        await new Promise((r) => setTimeout(r, 1000));
+        const getRes = await client.send(
+          new GetQueryResultsCommand({ queryId: startRes.queryId })
+        );
+        status = getRes.status;
+        attempts++;
+        if (status === QueryStatus.Complete) {
+          count = getRes.results?.length ?? 0;
+          break;
+        }
+      }
+      return count;
+    }
+
+    const qEntered = `fields @timestamp, @message
+| filter @message like /Preparar Datos/ and @message like /TaskStateEntered/
+| sort @timestamp desc
+| limit 100`;
+    const qExitedNoFilter = `fields @timestamp, @message
+| filter @message like /TaskStateExited/ and @message like /Preparar Datos/
+| sort @timestamp desc
+| limit 100`;
+    const qExitedWithFilter = `fields @timestamp, @message
+| filter @message like /TaskStateExited/ and @message like /Preparar Datos/
+| filter @message not like /"output":"null"/
+| sort @timestamp desc
+| limit 100`;
+
+    const [entered, exitedNoFilter, exitedWithFilter] = await Promise.all([
+      runQuery(qEntered),
+      runQuery(qExitedNoFilter),
+      runQuery(qExitedWithFilter),
+    ]);
+
+    return {
+      date,
+      logGroup,
+      taskStateEntered: entered,
+      taskStateExitedNoOutputFilter: exitedNoFilter,
+      taskStateExitedWithOutputFilter: exitedWithFilter,
+    };
+  },
+});
+
+/**
+ * Diagnóstico: busca una referencia en CloudWatch (V1, V2, Payment) para ver
+ * el estatus original en los logs. Útil para detectar pagos incorrectamente
+ * marcados como PAGADO.
+ */
+type SearchReferenciaResult = {
+  foundInConvex: boolean;
+  convexRecord: {
+    referencia: string;
+    estatus: string;
+    logSource: string;
+    importDate?: string;
+    importMonth: string;
+    monto: number;
+  } | null;
+  error?: string;
+  dateRange?: { start: string; end: string; startTimeSec: number; endTimeSec: number };
+  v1: Array<{ timestamp?: string; estatus: string | null; messagePreview: string }>;
+  v2: Array<{ timestamp?: string; estatus: string | null; messagePreview: string }>;
+  payment: Array<{ timestamp?: string; estatus: string | null; messagePreview: string }>;
+};
+
+export const searchReferenciaInCloudWatch = action({
+  args: {
+    referencia: v.string(),
+    /** Rango: YYYY-MM-DD. Si no se da, usa el mes completo de importDate en Convex. */
+    startDate: v.optional(v.string()),
+    endDate: v.optional(v.string()),
+  },
+  handler: async (
+    ctx,
+    { referencia, startDate, endDate }
+  ): Promise<SearchReferenciaResult> => {
+    // Si no hay fechas, buscar en Convex para obtener importDate
+    let start = startDate;
+    let end = endDate;
+    if (!start || !end) {
+      const records = (await ctx.runQuery(api.queries.searchByReferencia, {
+        referencia,
+      })) as Array<{
+        referencia: string;
+        importDate?: string;
+        timestamp?: string;
+        estatus?: string;
+        logSource?: string;
+        importMonth?: string;
+        monto?: number;
+      }>;
+      if (records.length === 0) {
+        return {
+          foundInConvex: false,
+          convexRecord: null,
+          error: "Referencia no encontrada en Convex",
+          v1: [],
+          v2: [],
+          payment: [],
+        };
+      }
+      const first = records[0];
+      const importDate = first.importDate ?? first.timestamp?.substring(0, 10);
+      if (!importDate) {
+        return {
+          foundInConvex: true,
+          convexRecord: {
+            referencia: first.referencia,
+            estatus: first.estatus ?? "",
+            logSource: first.logSource ?? "",
+            importDate: first.importDate,
+            importMonth: first.importMonth ?? "",
+            monto: first.monto ?? 0,
+          },
+          error: "No se pudo determinar importDate para rango CloudWatch",
+          v1: [],
+          v2: [],
+          payment: [],
+        };
+      }
+      const [y, m, d] = importDate.split("-").map(Number);
+      start = `${y}-${String(m).padStart(2, "0")}-01`;
+      const lastDay = new Date(y, m, 0).getDate();
+      end = `${y}-${String(m).padStart(2, "0")}-${String(lastDay).padStart(2, "0")}`;
+    }
+
+    const [sy, sm, sd] = start.split("-").map(Number);
+    const [ey, em, ed] = end.split("-").map(Number);
+    const startUtc = new Date(Date.UTC(sy, sm - 1, sd, 6, 0, 0, 0));
+    const endUtc = new Date(Date.UTC(ey, em - 1, ed + 1, 5, 59, 59, 999));
+    const startTimeSec = Math.floor(startUtc.getTime() / 1000);
+    const endTimeSec = Math.floor(endUtc.getTime() / 1000);
+
+    const v1V2Query = `fields @timestamp, @message
+| filter @message like /Preparar Datos/ and @message like /TaskStateEntered/
+| filter @message like /${referencia.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}/
+| sort @timestamp desc
+| limit 20`;
+
+    const paymentQuery = `fields @timestamp, @message
+| filter @message like /${referencia.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}/
+| sort @timestamp desc
+| limit 20`;
+
+    async function runQuery(
+      version: "v1" | "v2" | "payment"
+    ): Promise<Array<Record<string, string>>> {
+      const logGroup = LOG_GROUPS[version];
+      const q = version === "payment" ? paymentQuery : v1V2Query;
+      const startRes = await client.send(
+        new StartQueryCommand({
+          logGroupName: logGroup,
+          startTime: startTimeSec,
+          endTime: endTimeSec,
+          queryString: q,
+        })
+      );
+      if (!startRes.queryId) return [];
+      let status: QueryStatus | undefined = QueryStatus.Running;
+      let rawResults: Array<Array<{ field?: string; value?: string }>> = [];
+      let attempts = 0;
+      while (status === QueryStatus.Running || status === QueryStatus.Scheduled) {
+        if (attempts >= 30) break;
+        await new Promise((r) => setTimeout(r, 1000));
+        const getRes = await client.send(
+          new GetQueryResultsCommand({ queryId: startRes.queryId })
+        );
+        status = getRes.status;
+        attempts++;
+        if (status === QueryStatus.Complete) {
+          rawResults = getRes.results || [];
+          break;
+        }
+      }
+      return rawResults.map((row) => {
+        const result: Record<string, string> = {};
+        for (const f of row) {
+          if (f.field && f.value) result[f.field] = f.value;
+        }
+        return result;
+      });
+    }
+
+    const [v1Rows, v2Rows, paymentRows] = await Promise.all([
+      runQuery("v1").catch((e) => {
+        console.error("[v1]:", e);
+        return [] as Array<Record<string, string>>;
+      }),
+      runQuery("v2").catch((e) => {
+        console.error("[v2]:", e);
+        return [] as Array<Record<string, string>>;
+      }),
+      runQuery("payment").catch((e) => {
+        console.error("[payment]:", e);
+        return [] as Array<Record<string, string>>;
+      }),
+    ]);
+
+    const extractEstatus = (msg: string): string | null => {
+      const m = msg.match(/"estatus"\s*:\s*"([^"]*)"/);
+      if (m) return m[1];
+      const m2 = msg.match(/"status"\s*:\s*"([^"]*)"/);
+      if (m2) return m2[1];
+      return null;
+    };
+
+    const convexRecords = (await ctx.runQuery(
+      api.queries.searchByReferencia,
+      { referencia }
+    )) as Array<{
+      referencia: string;
+      estatus: string;
+      logSource: string;
+      importDate?: string;
+      importMonth: string;
+      monto: number;
+    }>;
+
+    return {
+      foundInConvex: convexRecords.length > 0,
+      convexRecord:
+        convexRecords.length > 0
+          ? {
+              referencia: convexRecords[0].referencia,
+              estatus: convexRecords[0].estatus,
+              logSource: convexRecords[0].logSource,
+              importDate: convexRecords[0].importDate,
+              importMonth: convexRecords[0].importMonth,
+              monto: convexRecords[0].monto,
+            }
+          : null,
+      dateRange: { start, end, startTimeSec, endTimeSec },
+      v1: v1Rows.map((r) => ({
+        timestamp: r["@timestamp"],
+        estatus: extractEstatus(r["@message"] ?? ""),
+        messagePreview: (r["@message"] ?? "").substring(0, 500),
+      })),
+      v2: v2Rows.map((r) => ({
+        timestamp: r["@timestamp"],
+        estatus: extractEstatus(r["@message"] ?? ""),
+        messagePreview: (r["@message"] ?? "").substring(0, 500),
+      })),
+      payment: paymentRows.map((r) => ({
+        timestamp: r["@timestamp"],
+        estatus: extractEstatus(r["@message"] ?? ""),
+        messagePreview: (r["@message"] ?? "").substring(0, 500),
+      })),
+    };
+  },
+});
+
+export const getReferenciasAboveMonto = action({
+  args: {
+    month: v.string(),
+    minMonto: v.number(),
+  },
+  handler: async (ctx, { month, minMonto }) => {
+    const results: Array<{ referencia: string; monto: number }> = [];
+    let cursor: string | null = null;
+
+    while (true) {
+      const result = (await ctx.runQuery(
+        api.queries.getPaymentsByMonthPaginated,
+        {
+          month,
+          paginationOpts: { numItems: 1000, cursor },
+        }
+      )) as {
+        page: Array<{ referencia: string; monto: number; estatus: string }>;
+        isDone: boolean;
+        continueCursor: string | null;
+      };
+
+      for (const r of result.page) {
+        if (r.monto > minMonto && isPagado(r.estatus)) {
+          results.push({ referencia: r.referencia, monto: r.monto });
+        }
+      }
+
+      if (result.isDone) break;
+      cursor = result.continueCursor;
+    }
+
+    results.sort((a, b) => b.monto - a.monto);
+    return results;
   },
 });
 

@@ -13,6 +13,7 @@ import type * as annualQueries from "../annualQueries.js";
 import type * as januaryETL from "../januaryETL.js";
 import type * as januaryMutations from "../januaryMutations.js";
 import type * as januaryQueries from "../januaryQueries.js";
+import type * as lib_dynamodb from "../lib/dynamodb.js";
 import type * as lib_mexicoDate from "../lib/mexicoDate.js";
 import type * as lib_parsers from "../lib/parsers.js";
 import type * as movementCodes from "../movementCodes.js";
@@ -31,6 +32,7 @@ declare const fullApi: ApiFromModules<{
   januaryETL: typeof januaryETL;
   januaryMutations: typeof januaryMutations;
   januaryQueries: typeof januaryQueries;
+  "lib/dynamodb": typeof lib_dynamodb;
   "lib/mexicoDate": typeof lib_mexicoDate;
   "lib/parsers": typeof lib_parsers;
   movementCodes: typeof movementCodes;

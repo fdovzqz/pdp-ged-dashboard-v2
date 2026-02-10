@@ -3,13 +3,14 @@
 import Image from "next/image";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { CalendarDays, Upload, BarChart3 } from "lucide-react";
+import { CalendarDays, Upload, BarChart3, GitCompare } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 const NAV_ITEMS = [
   { href: "/", label: "Análisis Mensual", icon: CalendarDays },
   { href: "/anual", label: "Análisis Anual", icon: BarChart3 },
   { href: "/upload", label: "Datos", icon: Upload },
+  { href: "/reconcile/january-2026", label: "Reconciliar Ene 2026", icon: GitCompare },
 ];
 
 export const Nav = (): React.ReactElement => {

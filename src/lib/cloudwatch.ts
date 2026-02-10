@@ -26,11 +26,12 @@ export function getLogGroup(version: LogGroupVersion): string {
   return LOG_GROUPS[version];
 }
 
-// Query para extraer todos los pagos con detalles completos
+// Query para extraer todos los pagos con detalles completos (solo exitosos: output != null)
 const PAYMENTS_QUERY = `
 fields @timestamp, @message
-| filter @message like /TaskStateEntered/ and @message like /"name":\\s*"Preparar Datos"/
-| parse @message /"input":\\s*"(?<inputRaw>[^"]*(?:\\\\"[^"]*)*)"/ 
+| filter @message like /TaskStateExited/ and @message like /"name":\\s*"Preparar Datos"/
+| filter @message not like /"output":"null"/
+| parse @message /"input":\\s*"(?<inputRaw>[^"]*(?:\\\\"[^"]*)*)"/
 | display @timestamp, inputRaw
 | sort @timestamp asc
 | limit 10000
@@ -39,7 +40,8 @@ fields @timestamp, @message
 // Query alternativa más simple
 const SIMPLE_QUERY = `
 fields @timestamp, @message
-| filter @message like /Preparar Datos/ and @message like /TaskStateEntered/
+| filter @message like /TaskStateExited/ and @message like /Preparar Datos/
+| filter @message not like /"output":"null"/
 | filter @message like /"referencia"/
 | sort @timestamp desc
 | limit 10000
@@ -48,7 +50,8 @@ fields @timestamp, @message
 // Query para pagos con fecha de transacción en enero 2026
 const JANUARY_2026_QUERY = `
 fields @timestamp, @message
-| filter @message like /Preparar Datos/ and @message like /TaskStateEntered/
+| filter @message like /TaskStateExited/ and @message like /Preparar Datos/
+| filter @message not like /"output":"null"/
 | filter @message like /2026-01/
 | sort @timestamp desc
 | limit 10000
@@ -57,7 +60,8 @@ fields @timestamp, @message
 // Query para obtener conteo por referencia única
 const COUNT_QUERY = `
 fields @timestamp, @message
-| filter @message like /TaskStateEntered/ and @message like /"name":\s*"Preparar Datos"/
+| filter @message like /TaskStateExited/ and @message like /"name":\s*"Preparar Datos"/
+| filter @message not like /"output":"null"/
 | parse @message /"referencia":\s*"(?<referencia>[^"]+)"/
 | stats count(*) as veces by referencia
 | sort veces desc
