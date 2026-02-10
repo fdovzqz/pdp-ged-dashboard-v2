@@ -687,6 +687,41 @@ export const getJanuary2026DatamappingPage = query({
   },
 });
 
+/** Rango amplio para "todo el universo" (datamapping). */
+const DATAMAPPING_UNIVERSE_START = "2000-01-01T00:00:00.000Z";
+const DATAMAPPING_UNIVERSE_END = "2031-01-01T00:00:00.000Z";
+
+/**
+ * Página de datamappingRecords por rango de updatedAt (o todo el universo si se omite).
+ * Usado por la action de reconciliación con scope mes, periodo o universo.
+ */
+export const getDatamappingPageByDateRange = query({
+  args: {
+    updatedAtFrom: v.optional(v.string()),
+    updatedAtTo: v.optional(v.string()),
+    cursor: v.union(v.string(), v.null()),
+    numItems: v.optional(v.number()),
+  },
+  handler: async (ctx, { updatedAtFrom, updatedAtTo, cursor, numItems = JAN_2026_DATAMAPPING_PAGE_SIZE }) => {
+    const from = updatedAtFrom ?? DATAMAPPING_UNIVERSE_START;
+    const to = updatedAtTo ?? DATAMAPPING_UNIVERSE_END;
+    const result = await ctx.db
+      .query("datamappingRecords")
+      .withIndex("by_updatedAt", (q) => q.gte("updatedAt", from).lt("updatedAt", to))
+      .order("asc")
+      .paginate({ numItems, cursor });
+    return {
+      page: result.page.map((r) => ({
+        referencia: r.referencia,
+        monto: r.monto,
+        updatedAt: r.updatedAt,
+      })),
+      isDone: result.isDone,
+      continueCursor: result.continueCursor,
+    };
+  },
+});
+
 /**
  * Reconciliación Enero 2026 (versión limitada en una sola query).
  * Para ~70k registros usar la action getJanuary2026Reconciliation en actions.ts.
@@ -797,16 +832,13 @@ export const getJanuary2026Reconciliation = query({
   },
 });
 
-// --- Reconciliación Enero 2026: resumen y errores persistidos ---
+// --- Reconciliación: resumen y errores persistidos ---
 
-/** Resumen de la última reconciliación (para mostrar cuadros con %). */
+/** Resumen de la última reconciliación (scope: universo, un mes o periodo). Una sola fila; se sobrescribe al re-ejecutar. */
 export const getReconciliationSummaryJanuary2026 = query({
   args: {},
   handler: async (ctx) => {
-    const doc = await ctx.db
-      .query("reconciliationSummary")
-      .withIndex("by_month", (q) => q.eq("month", "2026-01"))
-      .first();
+    const doc = await ctx.db.query("reconciliationSummary").first();
     return doc;
   },
 });

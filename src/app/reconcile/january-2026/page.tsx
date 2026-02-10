@@ -94,15 +94,38 @@ function escapeCsv(s: string): string {
   return s;
 }
 
+type ScopeType = "universe" | "month" | "period";
+
+const MONTH_NAMES: Record<string, string> = {
+  "01": "Ene", "02": "Feb", "03": "Mar", "04": "Abr", "05": "May", "06": "Jun",
+  "07": "Jul", "08": "Ago", "09": "Sep", "10": "Oct", "11": "Nov", "12": "Dic",
+};
+
+function formatScopeLabel(scopeId: string): string {
+  if (scopeId === "universe") return "Todo el universo";
+  if (scopeId.includes("::")) {
+    const [s, e] = scopeId.split("::");
+    const [, sm] = s.split("-");
+    const [ey, em] = e.split("-");
+    return `${MONTH_NAMES[sm] ?? sm} ${s.slice(0, 4)} - ${MONTH_NAMES[em] ?? em} ${ey}`;
+  }
+  const [, m] = scopeId.split("-");
+  return `${MONTH_NAMES[m] ?? m} ${scopeId.slice(0, 4)}`;
+}
+
 export default function ReconcileJanuary2026Page(): React.ReactElement {
   const convex = useConvex();
-  const runReconciliation = useAction(api.actions.getJanuary2026Reconciliation);
+  const runReconciliationAction = useAction(api.actions.runReconciliation);
   const summary = useQuery(api.queries.getReconciliationSummaryJanuary2026);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [selectedKind, setSelectedKind] = useState<ErrorKind | null>(null);
   const [csvLoading, setCsvLoading] = useState<ErrorKind | null>(null);
   const [result, setResult] = useState<unknown>(null);
+  const [scope, setScope] = useState<ScopeType>("month");
+  const [month, setMonth] = useState("2026-01");
+  const [startMonth, setStartMonth] = useState("2026-01");
+  const [endMonth, setEndMonth] = useState("2026-01");
 
   const downloadCsv = useCallback(
     async (kind: ErrorKind) => {
@@ -150,8 +173,9 @@ export default function ReconcileJanuary2026Page(): React.ReactElement {
         const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
         const url = URL.createObjectURL(blob);
         const a = document.createElement("a");
+        const scopeSlug = effectiveSummary?.month ?? "run";
         a.href = url;
-        a.download = `reconciliacion-2026-01-${kind}.csv`;
+        a.download = `reconciliacion-${scopeSlug.replace("::", "_")}-${kind}.csv`;
         a.click();
         URL.revokeObjectURL(url);
       } finally {
@@ -178,14 +202,24 @@ export default function ReconcileJanuary2026Page(): React.ReactElement {
         effectiveSummary.mismatchCount
       : 0;
 
-  const showForm = effectiveSummary == null && !loading;
+  const hasExistingResult = effectiveSummary != null || result != null;
 
   const handleRunWithResult = async (): Promise<void> => {
     setLoading(true);
     setError(null);
     setSelectedKind(null);
     try {
-      const data = await runReconciliation();
+      const args =
+        scope === "universe"
+          ? { scope: "universe" as const }
+          : scope === "month"
+            ? { scope: "month" as const, month }
+            : {
+                scope: "period" as const,
+                startMonth,
+                endMonth,
+              };
+      const data = await runReconciliationAction(args);
       setResult(data);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Error al calcular reconciliación");
@@ -194,6 +228,9 @@ export default function ReconcileJanuary2026Page(): React.ReactElement {
     }
   };
 
+  const scopeLabel =
+    effectiveSummary?.month != null ? formatScopeLabel(effectiveSummary.month) : null;
+
   return (
     <div className="min-h-screen bg-background p-6">
       <div className="max-w-6xl mx-auto space-y-6">
@@ -201,10 +238,11 @@ export default function ReconcileJanuary2026Page(): React.ReactElement {
         <div className="flex flex-wrap items-center justify-between gap-4">
           <div>
             <h1 className="text-2xl font-semibold tracking-tight">
-              Reconciliación Enero 2026
+              Reconciliación
+              {scopeLabel != null ? `: ${scopeLabel}` : ""}
             </h1>
             <p className="text-sm text-muted-foreground mt-1">
-              Cruce en Convex: paymentRecords vs datamappingRecords. Sin AWS.
+              Cruce en Convex: paymentRecords vs datamappingRecords. Elige todo el universo, un mes o un periodo.
             </p>
           </div>
           <div className="flex items-center gap-2">
@@ -217,7 +255,7 @@ export default function ReconcileJanuary2026Page(): React.ReactElement {
               <ExternalLink className="size-4" />
               Nueva ventana
             </Button>
-            {(effectiveSummary != null || result != null) && (
+            {hasExistingResult && (
               <Button
                 variant="secondary"
                 size="sm"
@@ -232,22 +270,94 @@ export default function ReconcileJanuary2026Page(): React.ReactElement {
           </div>
         </div>
 
-        {/* Form: calcular si no hay resumen */}
-        {showForm && (
+        {/* Form: siempre visible para calcular o cambiar alcance. Al ejecutar se borran los datos actuales. */}
+        {!loading && (
           <Card className="border-slate-700/50 bg-slate-900/30">
             <CardHeader>
               <CardTitle className="text-base">
-                Calcular reconciliación completa
+                {hasExistingResult ? "Ejecutar otra reconciliación" : "Calcular reconciliación"}
               </CardTitle>
               <CardDescription>
-                Usa datos en Convex. Guarda resultados en tablas de errores (se
-                borran al re-ejecutar). Puede tardar 1–2 min.
+                {hasExistingResult
+                  ? "Elige un nuevo alcance y pulsa Calcular. Los datos actuales se borrarán y se generará la nueva reconciliación."
+                  : "Usa datos en Convex. Guarda resultados en tablas de errores. Puede tardar 1–2 min (periodo/universo más)."}
               </CardDescription>
             </CardHeader>
-            <CardContent>
+            <CardContent className="space-y-4">
+              <div className="space-y-2">
+                <p className="text-sm font-medium">Alcance</p>
+                <div className="flex flex-wrap gap-4">
+                  <label className="flex items-center gap-2 cursor-pointer">
+                    <input
+                      type="radio"
+                      name="scope"
+                      checked={scope === "universe"}
+                      onChange={() => setScope("universe")}
+                      className="rounded border-slate-500"
+                    />
+                    <span className="text-sm">Todo el universo</span>
+                  </label>
+                  <label className="flex items-center gap-2 cursor-pointer">
+                    <input
+                      type="radio"
+                      name="scope"
+                      checked={scope === "month"}
+                      onChange={() => setScope("month")}
+                      className="rounded border-slate-500"
+                    />
+                    <span className="text-sm">Un mes</span>
+                  </label>
+                  <label className="flex items-center gap-2 cursor-pointer">
+                    <input
+                      type="radio"
+                      name="scope"
+                      checked={scope === "period"}
+                      onChange={() => setScope("period")}
+                      className="rounded border-slate-500"
+                    />
+                    <span className="text-sm">Periodo a elegir</span>
+                  </label>
+                </div>
+              </div>
+              {scope === "month" && (
+                <div className="flex flex-wrap items-center gap-2">
+                  <label className="text-sm text-muted-foreground">Mes:</label>
+                  <input
+                    type="month"
+                    value={month}
+                    onChange={(e) => setMonth(e.target.value)}
+                    className="rounded border border-slate-600 bg-slate-800 px-3 py-2 text-sm"
+                  />
+                </div>
+              )}
+              {scope === "period" && (
+                <div className="flex flex-wrap items-center gap-3">
+                  <div className="flex items-center gap-2">
+                    <label className="text-sm text-muted-foreground">Desde:</label>
+                    <input
+                      type="month"
+                      value={startMonth}
+                      onChange={(e) => setStartMonth(e.target.value)}
+                      className="rounded border border-slate-600 bg-slate-800 px-3 py-2 text-sm"
+                    />
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <label className="text-sm text-muted-foreground">Hasta:</label>
+                    <input
+                      type="month"
+                      value={endMonth}
+                      onChange={(e) => setEndMonth(e.target.value)}
+                      className="rounded border border-slate-600 bg-slate-800 px-3 py-2 text-sm"
+                    />
+                  </div>
+                  {startMonth > endMonth && (
+                    <span className="text-sm text-amber-500">Desde debe ser ≤ hasta</span>
+                  )}
+                </div>
+              )}
               <Button
                 onClick={handleRunWithResult}
-                disabled={loading}
+                disabled={loading || (scope === "period" && startMonth > endMonth)}
                 className="gap-2 bg-emerald-600 hover:bg-emerald-700"
               >
                 {loading ? (
@@ -258,7 +368,12 @@ export default function ReconcileJanuary2026Page(): React.ReactElement {
                 ) : (
                   <>
                     <GitCompare className="size-4" />
-                    Calcular reconciliación Enero 2026
+                    {hasExistingResult ? "Calcular (reemplaza actual)" : "Calcular reconciliación"}
+                    {scope === "universe"
+                      ? " (todo el universo)"
+                      : scope === "month"
+                        ? ` (${formatScopeLabel(month)})`
+                        : ` (${formatScopeLabel(`${startMonth}::${endMonth}`)})`}
                   </>
                 )}
               </Button>
@@ -439,7 +554,7 @@ function InvestigateReferenciaCard(): React.ReactElement {
         <CardTitle className="text-base">Investigar referencia</CardTitle>
         <CardDescription>
           Ver por qué una referencia aparece como solo CloudWatch, solo
-          Datamapping o mismatch (ej. updatedAt fuera de enero 2026, precisión
+          Datamapping o mismatch (ej. updatedAt fuera del periodo, precisión
           numérica).
         </CardDescription>
       </CardHeader>
@@ -496,7 +611,7 @@ function InvestigateReferenciaCard(): React.ReactElement {
                   {investigation.datamappingRecords.map((r, i) => (
                     <li key={i}>
                       ref={r.referencia} monto={r.monto} updatedAt={r.updatedAt}{" "}
-                      {r.inJanuary2026 ? "✓ ene 2026" : "✗ fuera ene 2026"}
+                      {r.inJanuary2026 ? "✓ en periodo" : "✗ fuera periodo"}
                     </li>
                   ))}
                 </ul>

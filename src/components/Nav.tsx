@@ -10,7 +10,7 @@ const NAV_ITEMS = [
   { href: "/", label: "Análisis Mensual", icon: CalendarDays },
   { href: "/anual", label: "Análisis Anual", icon: BarChart3 },
   { href: "/upload", label: "Datos", icon: Upload },
-  { href: "/reconcile/january-2026", label: "Reconciliar Ene 2026", icon: GitCompare },
+  { href: "/reconcile/january-2026", label: "Reconciliar", icon: GitCompare },
 ];
 
 export const Nav = (): React.ReactElement => {

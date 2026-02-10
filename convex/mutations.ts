@@ -527,15 +527,12 @@ export const deleteDatamappingRecordsBatch = mutation({
 
 const RECONCILIATION_ERRORS_BATCH = 400;
 
-/** Borra resumen y un lote de reconciliationErrors. La action debe llamar en loop hasta deleted < batch size. */
+/** Borra el resumen actual (cualquier scope) y un lote de reconciliationErrors. La action debe llamar en loop hasta deleted < batch size. */
 export const clearReconciliationJanuary2026Batch = mutation({
   args: {},
   handler: async (ctx) => {
-    const summary = await ctx.db
-      .query("reconciliationSummary")
-      .withIndex("by_month", (q) => q.eq("month", "2026-01"))
-      .first();
-    if (summary) await ctx.db.delete(summary._id);
+    const summaries = await ctx.db.query("reconciliationSummary").collect();
+    for (const s of summaries) await ctx.db.delete(s._id);
     const batch = await ctx.db.query("reconciliationErrors").take(RECONCILIATION_ERRORS_BATCH);
     for (const r of batch) await ctx.db.delete(r._id);
     return { deleted: batch.length };
@@ -569,9 +566,10 @@ export const insertReconciliationErrorsBatch = mutation({
   },
 });
 
-/** Escribe el resumen de la última reconciliación (sobrescribe si ya existe para 2026-01). */
+/** Escribe el resumen de la última reconciliación. scopeId: "universe" | "YYYY-MM" | "YYYY-MM::YYYY-MM". Sobrescribe el resumen anterior. */
 export const setReconciliationSummaryJanuary2026 = mutation({
   args: {
+    scopeId: v.string(),
     matchCount: v.number(),
     onlyCwCount: v.number(),
     onlyDdbCount: v.number(),
@@ -580,12 +578,9 @@ export const setReconciliationSummaryJanuary2026 = mutation({
     totalUnique: v.number(),
   },
   handler: async (ctx, args) => {
-    const existing = await ctx.db
-      .query("reconciliationSummary")
-      .withIndex("by_month", (q) => q.eq("month", "2026-01"))
-      .first();
+    const existing = await ctx.db.query("reconciliationSummary").first();
     const doc = {
-      month: "2026-01",
+      month: args.scopeId,
       runAt: Date.now(),
       matchCount: args.matchCount,
       onlyCwCount: args.onlyCwCount,

@@ -104,7 +104,7 @@ export const buildJanuaryAggregates = action({
           Object.entries(config.descriptions).map(([k, v]) => [toAscii(k) || k, v])
         ),
         aliases: Object.fromEntries(
-          Object.entries(config.aliases).map(([k, v]) => [toAscii(k) || k, toAscii(v) || v])
+          Object.entries(config.aliases).map(([k, v]: [string, string]) => [toAscii(k) || k, toAscii(v) || v])
         ),
       };
       const rawHourlyMap = new Map<string, { events: number; totalAmount: number }>();

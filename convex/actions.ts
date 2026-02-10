@@ -410,22 +410,83 @@ export const exploreDatamappingAttributes = action({
   },
 });
 
-const JAN_2026_RECONCILIATION_MONTH = "2026-01";
-/** Enero 2026 en hora México (UTC-6): [1 ene 00:00, 1 feb 00:00) local = [2026-01-01T06:00Z, 2026-02-01T06:00Z). Ambas fuentes estandarizadas a México. */
-const JAN_2026_START = "2026-01-01T06:00:00.000Z";
-const JAN_2026_END = "2026-02-01T06:00:00.000Z";
-const JAN_2026_CW_PAGE = 5000;
-const JAN_2026_DDB_PAGE = 500;
+const RECONCILIATION_CW_PAGE = 5000;
+const RECONCILIATION_DDB_PAGE = 500;
+
+/** Siguiente mes en formato YYYY-MM. */
+function nextMonth(ym: string): string {
+  const [y, m] = ym.split("-").map(Number);
+  const d = new Date(y, m, 1);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+}
+
+/** Lista de meses entre start y end (YYYY-MM) inclusive. */
+function listMonthsInRange(start: string, end: string): string[] {
+  const out: string[] = [];
+  let cur = start;
+  while (cur <= end) {
+    out.push(cur);
+    cur = nextMonth(cur);
+  }
+  return out;
+}
+
+/** Rango UTC para un mes en hora México (UTC-6): [día 1 00:00, día 1 siguiente 00:00). */
+function monthToUtcRange(month: string): { from: string; to: string } {
+  const [y, m] = month.split("-").map(Number);
+  const from = new Date(Date.UTC(y, m - 1, 1, 6, 0, 0, 0));
+  const to = new Date(Date.UTC(y, m, 1, 6, 0, 0, 0));
+  return {
+    from: from.toISOString().replace(/\.\d{3}Z$/, ".000Z"),
+    to: to.toISOString().replace(/\.\d{3}Z$/, ".000Z"),
+  };
+}
 
 /**
- * Reconciliación Enero 2026 (~70k): solo lee datos ya en Convex.
- * Usa paymentRecords (origen CloudWatch) y datamappingRecords (origen DynamoDB PAGO VALIDADO).
- * No llama a AWS; paginado para no exceder límites de lectura/tiempo de Convex.
+ * Reconciliación: paymentRecords vs datamappingRecords en Convex.
+ * Scope: "universe" (todo), "month" (un mes), "period" (rango de meses).
  */
-export const getJanuary2026Reconciliation = action({
-  args: {},
-  handler: async (ctx) => {
+export const runReconciliation = action({
+  args: {
+    scope: v.union(v.literal("universe"), v.literal("month"), v.literal("period")),
+    month: v.optional(v.string()),
+    startMonth: v.optional(v.string()),
+    endMonth: v.optional(v.string()),
+  },
+  handler: async (ctx, { scope, month, startMonth, endMonth }) => {
     const startMs = Date.now();
+
+    let scopeId: string;
+    let cwMonths: string[];
+    let ddbFrom: string | undefined;
+    let ddbTo: string | undefined;
+
+    if (scope === "universe") {
+      scopeId = "universe";
+      const allMonths = (await ctx.runQuery(api.queries.getAllMonthsStatus, {})) as { month: string }[];
+      cwMonths = allMonths.map((m) => m.month).sort();
+      if (cwMonths.length === 0) {
+        throw new Error("No hay meses cargados en monthStats. Carga datos primero.");
+      }
+      ddbFrom = undefined;
+      ddbTo = undefined;
+    } else if (scope === "month") {
+      if (!month) throw new Error("scope 'month' requiere month (YYYY-MM).");
+      scopeId = month;
+      cwMonths = [month];
+      const r = monthToUtcRange(month);
+      ddbFrom = r.from;
+      ddbTo = r.to;
+    } else {
+      if (!startMonth || !endMonth) throw new Error("scope 'period' requiere startMonth y endMonth (YYYY-MM).");
+      if (startMonth > endMonth) throw new Error("startMonth debe ser <= endMonth.");
+      scopeId = `${startMonth}::${endMonth}`;
+      cwMonths = listMonthsInRange(startMonth, endMonth);
+      const rStart = monthToUtcRange(startMonth);
+      const rEnd = monthToUtcRange(nextMonth(endMonth));
+      ddbFrom = rStart.from;
+      ddbTo = rEnd.to;
+    }
 
     const byRefCw = new Map<
       string,
@@ -438,50 +499,50 @@ export const getJanuary2026Reconciliation = action({
     >();
     const order: Record<string, number> = { payment: 0, v2: 1, v1: 2 };
     let cwTotalRecords = 0;
-    let cwCursor: string | null = null;
 
-    do {
-      if (Date.now() - startMs > ACTION_TIME_LIMIT_MS) {
-        throw new Error(
-          "Límite de tiempo alcanzado. Reconciliación Enero 2026 incompleta."
-        );
-      }
-      const cwResult = (await ctx.runQuery(
-        api.queries.getPaymentRecordsPageWithDetails,
-        {
-          month: JAN_2026_RECONCILIATION_MONTH,
-          cursor: cwCursor ?? undefined,
-          numItems: JAN_2026_CW_PAGE,
+    for (const m of cwMonths) {
+      let cwCursor: string | null = null;
+      do {
+        if (Date.now() - startMs > ACTION_TIME_LIMIT_MS) {
+          throw new Error("Límite de tiempo alcanzado. Reconciliación incompleta.");
         }
-      )) as {
-        page: Array<{
-          referencia: string;
-          monto: number;
-          logSource: string;
-          importMonth?: string;
-          timestamp?: string;
-        }>;
-        isDone: boolean;
-        continueCursor: string | null;
-      };
-      cwTotalRecords += cwResult.page.length;
-      for (const r of cwResult.page) {
-        const existing = byRefCw.get(r.referencia);
-        if (
-          !existing ||
-          order[r.logSource] < order[existing.logSource as keyof typeof order]
-        ) {
-          byRefCw.set(r.referencia, {
-            monto: r.monto,
-            logSource: r.logSource as "payment" | "v1" | "v2",
-            importMonth: r.importMonth ?? "",
-            timestamp: r.timestamp ?? "",
-          });
+        const cwResult = (await ctx.runQuery(
+          api.queries.getPaymentRecordsPageWithDetails,
+          {
+            month: m,
+            cursor: cwCursor ?? undefined,
+            numItems: RECONCILIATION_CW_PAGE,
+          }
+        )) as {
+          page: Array<{
+            referencia: string;
+            monto: number;
+            logSource: string;
+            importMonth?: string;
+            timestamp?: string;
+          }>;
+          isDone: boolean;
+          continueCursor: string | null;
+        };
+        cwTotalRecords += cwResult.page.length;
+        for (const r of cwResult.page) {
+          const existing = byRefCw.get(r.referencia);
+          if (
+            !existing ||
+            order[r.logSource] < order[existing.logSource as keyof typeof order]
+          ) {
+            byRefCw.set(r.referencia, {
+              monto: r.monto,
+              logSource: r.logSource as "payment" | "v1" | "v2",
+              importMonth: r.importMonth ?? "",
+              timestamp: r.timestamp ?? "",
+            });
+          }
         }
-      }
-      if (cwResult.isDone) break;
-      cwCursor = cwResult.continueCursor ?? null;
-    } while (true);
+        if (cwResult.isDone) break;
+        cwCursor = cwResult.continueCursor ?? null;
+      } while (true);
+    }
 
     const bySource = { payment: 0, v1: 0, v2: 0 };
     for (const [, { logSource }] of byRefCw) {
@@ -494,13 +555,16 @@ export const getJanuary2026Reconciliation = action({
 
     do {
       if (Date.now() - startMs > ACTION_TIME_LIMIT_MS) {
-        throw new Error(
-          "Límite de tiempo alcanzado. Reconciliación Enero 2026 incompleta."
-        );
+        throw new Error("Límite de tiempo alcanzado. Reconciliación incompleta.");
       }
       const ddbResult = (await ctx.runQuery(
-        api.queries.getJanuary2026DatamappingPage,
-        { cursor: ddbCursor, numItems: JAN_2026_DDB_PAGE }
+        api.queries.getDatamappingPageByDateRange,
+        {
+          updatedAtFrom: ddbFrom,
+          updatedAtTo: ddbTo,
+          cursor: ddbCursor,
+          numItems: RECONCILIATION_DDB_PAGE,
+        }
       )) as {
         page: Array<{ referencia: string; monto: number; updatedAt: string }>;
         isDone: boolean;
@@ -643,6 +707,7 @@ export const getJanuary2026Reconciliation = action({
     } while (cleared.deleted >= 400);
     // Escribir resumen
     await ctx.runMutation(api.mutations.setReconciliationSummaryJanuary2026, {
+      scopeId,
       matchCount,
       onlyCwCount,
       onlyDdbCount,
@@ -722,7 +787,7 @@ export const getJanuary2026Reconciliation = action({
     }
 
     return {
-      month: JAN_2026_RECONCILIATION_MONTH,
+      scopeId,
       cloudWatch: {
         totalRecords: cwTotalRecords,
         uniqueReferencias: byRefCw.size,
@@ -736,7 +801,7 @@ export const getJanuary2026Reconciliation = action({
       datamapping: {
         totalRecords: ddbTotalRecords,
         uniqueReferencias: byRefDdb.size,
-        filter: { updatedAtFrom: JAN_2026_START, updatedAtTo: JAN_2026_END },
+        filter: { updatedAtFrom: ddbFrom ?? "(todo)", updatedAtTo: ddbTo ?? "(todo)" },
         truncated: false,
       },
       differences: {
@@ -763,6 +828,24 @@ export const getJanuary2026Reconciliation = action({
         inBothMatch: inBothMatch.slice(0, 30),
       },
     };
+  },
+});
+
+/** Alias: reconciliación solo Enero 2026 (compatibilidad con enlaces antiguos). */
+export const getJanuary2026Reconciliation = action({
+  args: {},
+  handler: async (ctx): Promise<{
+    scopeId: string;
+    cloudWatch: unknown;
+    datamapping: unknown;
+    differences: unknown;
+    summary: unknown;
+    samples: unknown;
+  }> => {
+    return await ctx.runAction(api.actions.runReconciliation, {
+      scope: "month",
+      month: "2026-01",
+    });
   },
 });
 

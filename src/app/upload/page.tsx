@@ -589,7 +589,7 @@ export default function UploadPage(): React.ReactElement {
               rel="noopener noreferrer"
               className="text-sm font-normal text-emerald-400 hover:text-emerald-300 ml-auto"
             >
-              Reconciliar Enero 2026 →
+              Reconciliar →
             </Link>
           </h2>
           <p className="text-sm text-muted-foreground">
