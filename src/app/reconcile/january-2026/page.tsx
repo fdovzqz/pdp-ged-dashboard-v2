@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback, useEffect } from "react";
+import { useState, useCallback, useEffect, useRef } from "react";
 import { useAction, useQuery, useConvex } from "convex/react";
 import { api } from "convex/_generated/api";
 import type { Doc } from "convex/_generated/dataModel";
@@ -127,6 +127,14 @@ export default function ReconcileJanuary2026Page(): React.ReactElement {
   const [startMonth, setStartMonth] = useState("2026-01");
   const [endMonth, setEndMonth] = useState("2026-01");
 
+  const effectiveSummary =
+    summary ??
+    (result != null &&
+    typeof result === "object" &&
+    "summary" in result
+      ? (result as { summary: typeof summary }).summary
+      : null);
+
   const downloadCsv = useCallback(
     async (kind: ErrorKind) => {
       setCsvLoading(kind);
@@ -182,16 +190,8 @@ export default function ReconcileJanuary2026Page(): React.ReactElement {
         setCsvLoading(null);
       }
     },
-    [convex]
+    [convex, effectiveSummary?.month]
   );
-
-  const effectiveSummary =
-    summary ??
-    (result != null &&
-    typeof result === "object" &&
-    "summary" in result
-      ? (result as { summary: typeof summary }).summary
-      : null);
 
   const totalRefs =
     effectiveSummary != null
@@ -624,6 +624,21 @@ function InvestigateReferenciaCard(): React.ReactElement {
   );
 }
 
+function getRowMonth(r: Doc<"reconciliationErrors">): string {
+  const raw =
+    r.importMonth != null && String(r.importMonth).trim() !== ""
+      ? String(r.importMonth).trim().substring(0, 7)
+      : null;
+  if (raw) return raw;
+  if (
+    r.datamappingUpdatedAt != null &&
+    String(r.datamappingUpdatedAt).trim() !== ""
+  ) {
+    return timestampToMexicoMonth(r.datamappingUpdatedAt);
+  }
+  return "—";
+}
+
 function ReconciliationErrorsDetail({
   kind,
   onDownloadCsv,
@@ -635,19 +650,63 @@ function ReconciliationErrorsDetail({
 }): React.ReactElement {
   const [cursor, setCursor] = useState<string | null>(null);
   const [accumulated, setAccumulated] = useState<Doc<"reconciliationErrors">[]>([]);
+  const [countsByMonth, setCountsByMonth] = useState<Record<string, number> | null>(null);
+  const [countsLoading, setCountsLoading] = useState(true);
+  const [selectedMonths, setSelectedMonths] = useState<Set<string>>(new Set());
+  const autoLoadRequestedRef = useRef(false);
+  const hadMonthFilterRef = useRef(false);
+  const getCountsByMonth = useAction(api.actions.getReconciliationErrorsCountByMonth);
   const page = useQuery(api.queries.getReconciliationErrorsPage, {
     kind,
     cursor,
     numItems: 100,
   });
-  const displayRows = page == null ? [] : cursor === null ? page.page : accumulated;
+  const hasMonthFilter = selectedMonths.size > 0;
+  const rawRows =
+    page == null
+      ? []
+      : hasMonthFilter
+        ? cursor === null
+          ? page.page
+          : accumulated
+        : page.page;
+  const filteredRows =
+    !hasMonthFilter ? rawRows : rawRows.filter((r) => selectedMonths.has(getRowMonth(r)));
+  const displayRows = filteredRows;
+
+  const toggleMonth = (monthKey: string): void => {
+    setSelectedMonths((prev) => {
+      const next = new Set(prev);
+      if (next.has(monthKey)) next.delete(monthKey);
+      else next.add(monthKey);
+      return next;
+    });
+  };
+
+  const clearMonthFilter = (): void => setSelectedMonths(new Set());
+
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- fetch conteos por tipo
+    setCountsByMonth(null);
+    setCountsLoading(true);
+    getCountsByMonth({ kind })
+      .then((r) => {
+        setCountsByMonth(r.countsByMonth);
+      })
+      .finally(() => {
+        setCountsLoading(false);
+      });
+  }, [kind, getCountsByMonth]);
+
+  /** Convex limita argumentos (array max 8192). Enviamos solo un slice para no exceder. */
+  const MAX_REFERENCIAS_QUERY = 3000;
   const referenciasForPaymentLookup =
     kind === "onlyDdb" && displayRows.length > 0
-      ? displayRows.map((r) => r.referencia)
+      ? displayRows.slice(0, MAX_REFERENCIAS_QUERY).map((r) => r.referencia)
       : [];
   const referenciasForDatamappingLookup =
     kind === "onlyCw" && displayRows.length > 0
-      ? displayRows.map((r) => r.referencia)
+      ? displayRows.slice(0, MAX_REFERENCIAS_QUERY).map((r) => r.referencia)
       : [];
   const paymentMonthsByRef = useQuery(
     api.queries.getPaymentRecordsMonthsForReferencias,
@@ -663,18 +722,72 @@ function ReconciliationErrorsDetail({
   );
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- reset al cambiar tipo
     setCursor(null);
     setAccumulated([]);
+    setSelectedMonths(new Set());
+    autoLoadRequestedRef.current = false;
+    hadMonthFilterRef.current = false;
   }, [kind]);
+
+  // Al quitar el filtro: volver a primera página. Al activar filtro: empezar a acumular desde el inicio.
+  useEffect(() => {
+    /* eslint-disable react-hooks/set-state-in-effect -- reset al entrar/salir de filtro por mes */
+    if (!hasMonthFilter) {
+      if (hadMonthFilterRef.current) {
+        setCursor(null);
+        setAccumulated([]);
+      }
+      hadMonthFilterRef.current = false;
+      return;
+    }
+    if (!hadMonthFilterRef.current) {
+      hadMonthFilterRef.current = true;
+      setCursor(null);
+      setAccumulated([]);
+      autoLoadRequestedRef.current = false;
+    }
+    /* eslint-enable react-hooks/set-state-in-effect */
+  }, [hasMonthFilter]);
 
   useEffect(() => {
     if (page == null) return;
+    /* eslint-disable react-hooks/set-state-in-effect -- sincronizar accumulated con Convex */
+    if (!hasMonthFilter) {
+      setAccumulated([]);
+      return;
+    }
+    autoLoadRequestedRef.current = false;
     if (cursor === null) {
       setAccumulated(page.page);
     } else {
       setAccumulated((prev) => [...prev, ...page.page]);
     }
-  }, [page, cursor]);
+    /* eslint-enable react-hooks/set-state-in-effect */
+  }, [page, cursor, hasMonthFilter]);
+
+  // Con filtro por mes activo y tabla vacía, cargar una página más (evitar varias seguidas = menos parpadeo)
+  useEffect(() => {
+    if (
+      selectedMonths.size === 0 ||
+      filteredRows.length > 0 ||
+      !page ||
+      page.isDone ||
+      page.continueCursor == null ||
+      autoLoadRequestedRef.current
+    ) {
+      return;
+    }
+    /* eslint-disable react-hooks/set-state-in-effect -- auto-carga al filtrar por mes */
+    autoLoadRequestedRef.current = true;
+    setCursor(page.continueCursor);
+    /* eslint-enable react-hooks/set-state-in-effect */
+  }, [
+    selectedMonths.size,
+    filteredRows.length,
+    page?.isDone,
+    page?.continueCursor,
+  ]);
 
   if (page === undefined) {
     return (
@@ -686,7 +799,6 @@ function ReconciliationErrorsDetail({
     );
   }
 
-  const rows = cursor === null ? page.page : accumulated;
   const hasMore = !page.isDone && page.continueCursor != null;
 
   return (
@@ -710,7 +822,77 @@ function ReconciliationErrorsDetail({
           </Button>
         </div>
       </CardHeader>
-      <CardContent>
+      <CardContent className="space-y-4">
+        {/* Problemas por mes */}
+        {countsLoading ? (
+          <p className="text-sm text-muted-foreground">Agrupando por mes…</p>
+        ) : countsByMonth != null && Object.keys(countsByMonth).length > 0 ? (
+          <div className="space-y-2">
+            <p className="text-sm font-medium text-muted-foreground">
+              Problemas por mes — clic para filtrar la tabla (varios o ninguno = todos)
+            </p>
+            <div className="flex flex-wrap items-center gap-2">
+              {selectedMonths.size > 0 && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="h-7 text-xs"
+                  onClick={clearMonthFilter}
+                >
+                  Todos
+                </Button>
+              )}
+              {Object.entries(countsByMonth)
+                .sort(([a], [b]) => a.localeCompare(b))
+                .map(([monthKey, count]) => {
+                  const label =
+                    monthKey === "—"
+                      ? "Sin mes"
+                      : (() => {
+                          const [, m] = monthKey.split("-");
+                          const name = MONTH_NAMES[m as keyof typeof MONTH_NAMES] ?? m;
+                          return `${name} ${monthKey.slice(0, 4)}`;
+                        })();
+                  const isSelected = selectedMonths.has(monthKey);
+                  return (
+                    <Badge
+                      key={monthKey}
+                      variant={isSelected ? "default" : "secondary"}
+                      className="font-mono text-xs px-2 py-1 cursor-pointer hover:opacity-90"
+                      onClick={() => toggleMonth(monthKey)}
+                    >
+                      {label}: {count.toLocaleString("es-MX")}
+                    </Badge>
+                  );
+                })}
+            </div>
+            {selectedMonths.size > 0 && (
+              <p className="text-xs text-muted-foreground">
+                Mostrando {filteredRows.length.toLocaleString("es-MX")} de{" "}
+                {rawRows.length.toLocaleString("es-MX")} cargados
+              </p>
+            )}
+          </div>
+        ) : null}
+
+        {!hasMonthFilter && displayRows.length > 0 && (
+          <p className="text-xs text-muted-foreground">
+            Mostrando {displayRows.length} registros por página. Use «Cargar más» para los siguientes.
+          </p>
+        )}
+
+        {selectedMonths.size > 0 && filteredRows.length === 0 && (
+          <div className="rounded-md border border-slate-700/50 bg-slate-800/30 px-4 py-3 text-sm text-muted-foreground">
+            {hasMore ? (
+              <>
+                Buscando registros del mes seleccionado… ({rawRows.length.toLocaleString("es-MX")} cargados)
+              </>
+            ) : (
+              <>No hay registros para el/los mes(es) seleccionado(s).</>
+            )}
+          </div>
+        )}
+
         <div className="rounded-md border border-slate-700/50 overflow-x-auto">
           <Table>
             <TableHeader>
@@ -746,7 +928,7 @@ function ReconciliationErrorsDetail({
               </TableRow>
             </TableHeader>
             <TableBody>
-              {rows.map((r, i) => {
+              {filteredRows.map((r, i) => {
                 const effectiveCwMonth =
                   (kind === "onlyDdb" ? paymentMonthsByRef?.[r.referencia] : null) ??
                   (r.importMonth != null && r.importMonth !== "" ? r.importMonth : null);

@@ -849,6 +849,52 @@ export const getJanuary2026Reconciliation = action({
   },
 });
 
+const RECONCILIATION_ERRORS_COUNT_PAGE = 2000;
+
+/** Devuelve el número de errores por mes para un tipo (onlyCw | onlyDdb | mismatch | monthMismatch). */
+export const getReconciliationErrorsCountByMonth = action({
+  args: {
+    kind: v.union(
+      v.literal("onlyCw"),
+      v.literal("onlyDdb"),
+      v.literal("mismatch"),
+      v.literal("monthMismatch")
+    ),
+  },
+  handler: async (ctx, { kind }): Promise<{ countsByMonth: Record<string, number> }> => {
+    const countsByMonth: Record<string, number> = {};
+    let cursor: string | null = null;
+    do {
+      const result = (await ctx.runQuery(api.queries.getReconciliationErrorsPage, {
+        kind,
+        cursor,
+        numItems: RECONCILIATION_ERRORS_COUNT_PAGE,
+      })) as {
+        page: Array<{
+          importMonth?: string;
+          datamappingUpdatedAt?: string;
+        }>;
+        isDone: boolean;
+        continueCursor: string | null;
+      };
+      for (const doc of result.page) {
+        const month =
+          (doc.importMonth != null && doc.importMonth !== ""
+            ? doc.importMonth.substring(0, 7)
+            : null) ??
+          (doc.datamappingUpdatedAt != null && doc.datamappingUpdatedAt !== ""
+            ? timestampToMexicoMonth(doc.datamappingUpdatedAt)
+            : null) ??
+          "—";
+        countsByMonth[month] = (countsByMonth[month] ?? 0) + 1;
+      }
+      if (result.isDone) break;
+      cursor = result.continueCursor;
+    } while (true);
+    return { countsByMonth };
+  },
+});
+
 /** Regenera monthStats desde paymentRecords. Útil cuando ya hay datos pero monthStats está vacío. */
 export const recreateMonthStatsFromPaymentRecords = action({
   args: { month: v.string() },
