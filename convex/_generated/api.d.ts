@@ -22,6 +22,7 @@ import type * as lib_mexicoDate from "../lib/mexicoDate.js";
 import type * as lib_parsers from "../lib/parsers.js";
 import type * as movementCodes from "../movementCodes.js";
 import type * as mutations from "../mutations.js";
+import type * as pipelineJobs from "../pipelineJobs.js";
 import type * as queries from "../queries.js";
 
 import type {
@@ -45,6 +46,7 @@ declare const fullApi: ApiFromModules<{
   "lib/parsers": typeof lib_parsers;
   movementCodes: typeof movementCodes;
   mutations: typeof mutations;
+  pipelineJobs: typeof pipelineJobs;
   queries: typeof queries;
 }>;
 

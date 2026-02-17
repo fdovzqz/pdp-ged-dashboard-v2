@@ -732,6 +732,216 @@ const DATAMAPPING_UNIVERSE_START = "2000-01-01T00:00:00.000Z";
 const DATAMAPPING_UNIVERSE_END = "2031-01-01T00:00:00.000Z";
 
 /**
+ * Busca registros datamapping por RFC (índice by_rfc) en el rango desde enero hasta la fecha.
+ * Requiere ETL de enriquecimiento previo. Filtra por updatedAt.
+ */
+export const getDatamappingRecordsByRfcs = query({
+  args: {
+    rfcs: v.array(v.string()),
+    fromDate: v.optional(v.string()),
+    toDate: v.optional(v.string()),
+  },
+  handler: async (ctx, { rfcs, fromDate, toDate }) => {
+    const rfcsNormalized = rfcs
+      .map((r) => r.trim().toUpperCase())
+      .filter((r) => r.length > 0);
+    const updatedAtFrom = fromDate
+      ? (fromDate.includes("T") ? fromDate : `${fromDate}T00:00:00.000Z`)
+      : "2026-01-01T00:00:00.000Z";
+    const updatedAtTo = toDate
+      ? (toDate.includes("T")
+          ? toDate
+          : (() => {
+              const [y, m, d] = toDate.split("-").map(Number);
+              const next = new Date(Date.UTC(y, m - 1, d + 1));
+              return next.toISOString().replace(/\.\d{3}Z$/, ".000Z");
+            })())
+      : "2030-12-31T23:59:59.999Z";
+
+    const results: Array<{
+      rfc: string;
+      referencia: string;
+      monto: number;
+      updatedAt: string;
+      tipoMovimiento?: string;
+      fuente?: string;
+    }> = [];
+    for (const rfc of rfcsNormalized) {
+      const records = await ctx.db
+        .query("datamappingRecords")
+        .withIndex("by_rfc", (q) => q.eq("rfc", rfc))
+        .collect();
+      for (const r of records) {
+        const u = r.updatedAt ?? "";
+        if (u >= updatedAtFrom && u < updatedAtTo) {
+          results.push({
+            rfc,
+            referencia: r.referencia,
+            monto: r.monto,
+            updatedAt: r.updatedAt,
+            tipoMovimiento: r.tipoMovimiento,
+            fuente: r.fuente,
+          });
+        }
+      }
+    }
+    return results;
+  },
+});
+
+/** Último resultado guardado de la investigación RFC. */
+export const getLatestRfcInvestigationResults = query({
+  args: {},
+  handler: async (ctx) => {
+    const doc = await ctx.db
+      .query("rfcInvestigationResults")
+      .withIndex("by_runAt")
+      .order("desc")
+      .first();
+    return doc ?? null;
+  },
+});
+
+/**
+ * Página de datamappingRecords con rawJson por tipoMovimiento y rango de updatedAt.
+ * @deprecated Usar getDatamappingPageWithRawJsonNeedingEnrichment para enriquecimiento (por enrichmentExtracted).
+ */
+export const getDatamappingPageWithRawJsonByTipoMovimientoAndDateRange = query({
+  args: {
+    tipoMovimiento: v.string(),
+    updatedAtFrom: v.string(),
+    updatedAtTo: v.string(),
+    cursor: v.union(v.string(), v.null()),
+    numItems: v.optional(v.number()),
+  },
+  handler: async (ctx, { tipoMovimiento, updatedAtFrom, updatedAtTo, cursor, numItems = 150 }) => {
+    const result = await ctx.db
+      .query("datamappingRecords")
+      .withIndex("by_tipoMovimiento_updatedAt", (q) =>
+        q.eq("tipoMovimiento", tipoMovimiento).gte("updatedAt", updatedAtFrom).lt("updatedAt", updatedAtTo)
+      )
+      .order("asc")
+      .paginate({ numItems, cursor });
+    return {
+      page: result.page.map((r) => ({
+        _id: r._id,
+        referencia: r.referencia,
+        monto: r.monto,
+        updatedAt: r.updatedAt,
+        tipoMovimiento: r.tipoMovimiento,
+        fuente: r.fuente,
+        rawJson: r.rawJson,
+        rfc: r.rfc,
+      })),
+      isDone: result.isDone,
+      continueCursor: result.continueCursor,
+    };
+  },
+});
+
+/**
+ * Página de registros que faltan por enriquecer (enrichmentExtracted === false), por rango updatedAt.
+ * No filtra por tipo de movimiento: procesa todos. Extrae RFC + placa, evoId, etc. cuando existan.
+ */
+export const getDatamappingPageWithRawJsonNeedingEnrichment = query({
+  args: {
+    updatedAtFrom: v.string(),
+    updatedAtTo: v.string(),
+    cursor: v.union(v.string(), v.null()),
+    numItems: v.optional(v.number()),
+  },
+  handler: async (ctx, { updatedAtFrom, updatedAtTo, cursor, numItems = 50 }) => {
+    const result = await ctx.db
+      .query("datamappingRecords")
+      .withIndex("by_enrichmentExtracted_updatedAt", (q) =>
+        q
+          .eq("enrichmentExtracted", false)
+          .gte("updatedAt", updatedAtFrom)
+          .lt("updatedAt", updatedAtTo)
+      )
+      .order("asc")
+      .paginate({ numItems, cursor });
+    return {
+      page: result.page.map((r) => ({
+        _id: r._id,
+        referencia: r.referencia,
+        monto: r.monto,
+        updatedAt: r.updatedAt,
+        tipoMovimiento: r.tipoMovimiento,
+        fuente: r.fuente,
+        rawJson: r.rawJson,
+        rfc: r.rfc,
+      })),
+      isDone: result.isDone,
+      continueCursor: result.continueCursor,
+    };
+  },
+});
+
+/**
+ * Solo _id de registros que faltan por enriquecer (enrichmentExtracted === false). Para preflight sin rawJson.
+ */
+export const getDatamappingIdsNeedingEnrichment = query({
+  args: {
+    updatedAtFrom: v.string(),
+    updatedAtTo: v.string(),
+    cursor: v.union(v.string(), v.null()),
+    numItems: v.optional(v.number()),
+  },
+  handler: async (ctx, { updatedAtFrom, updatedAtTo, cursor, numItems = 2000 }) => {
+    const result = await ctx.db
+      .query("datamappingRecords")
+      .withIndex("by_enrichmentExtracted_updatedAt", (q) =>
+        q
+          .eq("enrichmentExtracted", false)
+          .gte("updatedAt", updatedAtFrom)
+          .lt("updatedAt", updatedAtTo)
+      )
+      .order("asc")
+      .paginate({ numItems, cursor });
+    return {
+      page: result.page.map((r) => ({ _id: r._id })),
+      isDone: result.isDone,
+      continueCursor: result.continueCursor,
+    };
+  },
+});
+
+/**
+ * Página de datamappingRecords con rawJson por rango de updatedAt.
+ * Usado por searchDatamappingByRfcs (fallback) y por acciones que escanean por fecha.
+ */
+export const getDatamappingPageWithRawJsonByDateRange = query({
+  args: {
+    updatedAtFrom: v.string(),
+    updatedAtTo: v.string(),
+    cursor: v.union(v.string(), v.null()),
+    numItems: v.optional(v.number()),
+  },
+  handler: async (ctx, { updatedAtFrom, updatedAtTo, cursor, numItems = 100 }) => {
+    const result = await ctx.db
+      .query("datamappingRecords")
+      .withIndex("by_updatedAt", (q) => q.gte("updatedAt", updatedAtFrom).lt("updatedAt", updatedAtTo))
+      .order("asc")
+      .paginate({ numItems, cursor });
+    return {
+      page: result.page.map((r) => ({
+        _id: r._id,
+        referencia: r.referencia,
+        monto: r.monto,
+        updatedAt: r.updatedAt,
+        tipoMovimiento: r.tipoMovimiento,
+        fuente: r.fuente,
+        rawJson: r.rawJson,
+        rfc: r.rfc,
+      })),
+      isDone: result.isDone,
+      continueCursor: result.continueCursor,
+    };
+  },
+});
+
+/**
  * Página de datamappingRecords por rango de updatedAt (o todo el universo si se omite).
  * Usado por la action de reconciliación con scope mes, periodo o universo.
  */
@@ -759,6 +969,89 @@ export const getDatamappingPageByDateRange = query({
       isDone: result.isDone,
       continueCursor: result.continueCursor,
     };
+  },
+});
+
+/**
+ * Página de datamappingRecords solo _id. Para backfill de enrichmentExtracted (marcar todos con false).
+ */
+export const getDatamappingPageIdForBackfill = query({
+  args: {
+    cursor: v.union(v.string(), v.null()),
+    numItems: v.optional(v.number()),
+  },
+  handler: async (ctx, { cursor, numItems = 400 }) => {
+    const result = await ctx.db
+      .query("datamappingRecords")
+      .withIndex("by_updatedAt", (q) =>
+        q.gte("updatedAt", DATAMAPPING_UNIVERSE_START).lt("updatedAt", DATAMAPPING_UNIVERSE_END)
+      )
+      .order("asc")
+      .paginate({ numItems, cursor });
+    return {
+      page: result.page.map((r) => ({ _id: r._id })),
+      isDone: result.isDone,
+      continueCursor: result.continueCursor,
+    };
+  },
+});
+
+/**
+ * Página de datamappingRecords solo _id en un rango updatedAt. Para backfill por mes (Inngest en paralelo).
+ */
+export const getDatamappingPageIdForBackfillByRange = query({
+  args: {
+    updatedAtFrom: v.string(),
+    updatedAtTo: v.string(),
+    cursor: v.union(v.string(), v.null()),
+    numItems: v.optional(v.number()),
+  },
+  handler: async (ctx, { updatedAtFrom, updatedAtTo, cursor, numItems = 400 }) => {
+    const result = await ctx.db
+      .query("datamappingRecords")
+      .withIndex("by_updatedAt", (q) =>
+        q.gte("updatedAt", updatedAtFrom).lt("updatedAt", updatedAtTo)
+      )
+      .order("asc")
+      .paginate({ numItems, cursor });
+    return {
+      page: result.page.map((r) => ({ _id: r._id })),
+      isDone: result.isDone,
+      continueCursor: result.continueCursor,
+    };
+  },
+});
+
+/** Tamaño de muestra para detectar enrichmentExtracted undefined (backfill). */
+const DATAMAPPING_ENRICHMENT_UNDEFINED_SAMPLE = 300;
+
+/** Muestra de registros para detectar si alguno tiene enrichmentExtracted undefined (requiere backfill). */
+export const getDatamappingHasEnrichmentExtractedUndefined = query({
+  args: {},
+  handler: async (ctx): Promise<{ hasUndefined: boolean }> => {
+    const sample = await ctx.db
+      .query("datamappingRecords")
+      .withIndex("by_updatedAt", (q) =>
+        q.gte("updatedAt", DATAMAPPING_UNIVERSE_START).lt("updatedAt", DATAMAPPING_UNIVERSE_END)
+      )
+      .order("asc")
+      .take(DATAMAPPING_ENRICHMENT_UNDEFINED_SAMPLE);
+    const hasUndefined = sample.some((r) => r.enrichmentExtracted === undefined);
+    return { hasUndefined };
+  },
+});
+
+const RFC_ENRICHMENT_RUNS_LIMIT = 30;
+
+/** Lista las últimas ejecuciones de enriquecimiento RFC (para tabla de estado persistente). */
+export const getRfcEnrichmentRuns = query({
+  args: {},
+  handler: async (ctx) => {
+    return await ctx.db
+      .query("rfcEnrichmentRuns")
+      .withIndex("by_startedAt", (q) => q.lte("startedAt", Date.now()))
+      .order("desc")
+      .take(RFC_ENRICHMENT_RUNS_LIMIT);
   },
 });
 
@@ -1054,5 +1347,17 @@ export const investigateReferenciaReconciliation = query({
       conclusion,
       note: "Referencias numéricas > 2^53 pueden truncarse si DynamoDB las guarda como número (precisión JS).",
     };
+  },
+});
+
+/** Devuelve la última updatedAt procesada en extracción incremental (null si nunca se ha corrido). */
+export const getDatamappingWatermark = query({
+  args: {},
+  handler: async (ctx) => {
+    const doc = await ctx.db
+      .query("processingControl")
+      .withIndex("by_key", (q) => q.eq("key", "datamapping_watermark"))
+      .first();
+    return { lastUpdatedAt: doc?.lastProcessedTimestamp ?? null };
   },
 });

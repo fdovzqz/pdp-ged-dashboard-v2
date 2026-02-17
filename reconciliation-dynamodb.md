@@ -10,7 +10,7 @@ Reconciliación de pagos extraídos de CloudWatch (Step Functions) contra regist
 
 ## Flujo
 
-1. **Ingesta DynamoDB → Convex**: action `fetchDatamappingAndIngest({ sinceDate: "2026-01-01" })` consulta el GSI con paginación, mapea cada item con `mapDynamoItemToRecord` e inserta en la tabla `datamappingRecords`.
+1. **Ingesta DynamoDB → Convex**: action `fetchDatamappingAndIngest({ sinceDate: "2026-01-01" })` o para histórico completo Inngest usa `fetchDatamappingForDayChunk` (por chunk para evitar 524/600s). Consulta el GSI con paginación, mapea cada item con `mapDynamoItemToRecord` e inserta en la tabla `datamappingRecords` (upsert por `transactionId`).
 2. **Exploración de atributos**: action `exploreDatamappingAttributes({ sinceDate })` o script `npx tsx scripts/explore-dynamodb-attributes.ts 2026-01-01` para listar las keys del primer item y confirmar nombres de columnas.
 3. **Reconciliación**: query `getReconciliationReport({ month: "2026-01" })` compara por `referencia` entre `paymentRecords` (CloudWatch) y `datamappingRecords` (DynamoDB) y devuelve conteos y muestras: solo en CloudWatch, solo en DynamoDB, en ambos (match/mismatch de monto).
 

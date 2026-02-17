@@ -1,12 +1,28 @@
 "use node";
 
-import { action } from "./_generated/server";
+import { action, type ActionCtx } from "./_generated/server";
 import { api } from "./_generated/api";
 import type { Id } from "./_generated/dataModel";
 import { v } from "convex/values";
 
 /** Límite Convex: 600 segundos por acción. */
 const ACTION_TIME_LIMIT_MS = 550_000;
+
+/** Si el error es una respuesta HTML (500/524 de Cloudflare), devuelve un mensaje corto para reintento. */
+function sanitizeConvexResponseError(err: unknown): Error {
+  const msg = err instanceof Error ? err.message : String(err);
+  if (
+    msg.startsWith("<!DOCTYPE") ||
+    msg.startsWith("<html") ||
+    (msg.includes("500") && msg.includes("Internal server error"))
+  ) {
+    return new Error("Error 500 del servidor (Cloudflare/Convex). Reintentar en unos segundos.");
+  }
+  if (msg.includes("524") || msg.toLowerCase().includes("timeout")) {
+    return new Error("Timeout (524). Reintentar.");
+  }
+  return err instanceof Error ? err : new Error(msg);
+}
 import {
   CloudWatchLogsClient,
   StartQueryCommand,
@@ -14,13 +30,17 @@ import {
   QueryStatus,
 } from "@aws-sdk/client-cloudwatch-logs";
 import { parseV1V2, parsePayment } from "./lib/parsers";
-import { normalizeWithConfig } from "./movementCodes";
+import { normalizeWithConfig, toAscii } from "./movementCodes";
 import {
   queryDatamappingPagoValidadoSince,
   queryDatamappingPagoValidadoForDay,
   queryDatamappingPage,
+  queryDatamappingPageForMonth,
+  queryDatamappingPageForDay,
   mapDynamoItemToRecord,
   listFirstItemAttributes,
+  extractRfcFromRawJson,
+  extractEnrichmentFieldsFromRawJson,
 } from "./lib/dynamodb";
 import { timestampToMexicoMonth } from "./lib/mexicoDate";
 
@@ -105,9 +125,19 @@ export const fetchAndIngestForDate = action({
     date: v.string(),
   },
   handler: async (ctx, { date }) => {
+    const startMs = Date.now();
+    const checkTime = (): void => {
+      if (Date.now() - startMs > ACTION_TIME_LIMIT_MS) {
+        throw new Error(
+          "Límite de tiempo alcanzado (550s). Para fechas con muchos registros, ejecuta en horarios de menor carga o contacta soporte."
+        );
+      }
+    };
+
     // Borrar datos previos por importDate (en lotes, límite 4096 lecturas/mutación)
     let deleteByDateTotal = 0;
     while (true) {
+      checkTime();
       const res = (await ctx.runMutation(api.mutations.deletePaymentsByDate, {
         date,
       })) as { deleted: number };
@@ -140,6 +170,7 @@ export const fetchAndIngestForDate = action({
     // Si está en Payment es PAGO VALIDADO; si está en V1/V2 es exitoso (trámite encontrado en DB)
     const order = { payment: 0, v2: 1, v1: 2 };
 
+    checkTime();
     // Fetch las 3 fuentes en paralelo para respetar límite Convex de 600s por acción
     const [rowsV1, rowsV2, rowsPayment] = await Promise.all([
       fetchCloudWatch("v1", startTimeSec, endTimeSec).catch((e) => {
@@ -194,10 +225,12 @@ export const fetchAndIngestForDate = action({
     const records = Array.from(byRef.values()).map((x) => x.rec);
     const referencias = records.map((r) => r.referencia);
 
-    // Borrar en lotes: límite 4096 lecturas/mutación (1 read por referencia)
-    const DELETE_BATCH = 500;
+    // Borrar en lotes: cada mutación hace 1 query + 1 delete por referencia.
+    // Lotes grandes (500) pueden superar el timeout de mutación (~10s); usar 80 para estar seguros.
+    const DELETE_BATCH = 80;
     let deleteByRefTotal = 0;
     for (let i = 0; i < referencias.length; i += DELETE_BATCH) {
+      checkTime();
       const batch = referencias.slice(i, i + DELETE_BATCH);
       const res = (await ctx.runMutation(
         api.mutations.deletePaymentsByReferencias,
@@ -211,6 +244,7 @@ export const fetchAndIngestForDate = action({
     const BATCH = 100;
 
     for (let i = 0; i < records.length; i += BATCH) {
+      checkTime();
       const batch = records.slice(i, i + BATCH);
       const result = (await ctx.runMutation(api.mutations.ingestPaymentBatch, {
         records: batch,
@@ -295,22 +329,70 @@ const DATAMAPPING_INGEST_BATCH = 150;
 /** Límite Convex por acción. Procesamos hasta este número de registros por llamada. */
 const MAX_ITEMS_PER_ACTION = 4000;
 
-/** Carga DynamoDB → Convex por lotes de hasta 4000. El frontend llama en loop hasta hasMore=false. */
+type BaseDatamappingRec = ReturnType<typeof mapDynamoItemToRecord>;
+/** Añade enriquecimiento (RFC, placa, etc.) desde rawJson y marca enrichmentExtracted: true para la carga. */
+function withEnrichment(rec: BaseDatamappingRec): BaseDatamappingRec & {
+  rfc: string;
+  placa?: string;
+  evoId?: string;
+  codiId?: string;
+  expirationDate?: string;
+  folioNumber?: string;
+  loteId?: string;
+  procedureCategory?: string;
+  tramiteId?: string;
+  userId?: string;
+  enrichmentExtracted: true;
+} {
+  const fields = extractEnrichmentFieldsFromRawJson(rec.rawJson);
+  const out: BaseDatamappingRec & {
+    rfc: string;
+    placa?: string;
+    evoId?: string;
+    codiId?: string;
+    expirationDate?: string;
+    folioNumber?: string;
+    loteId?: string;
+    procedureCategory?: string;
+    tramiteId?: string;
+    userId?: string;
+    enrichmentExtracted: true;
+  } = {
+    ...rec,
+    rfc: fields.rfc ?? "",
+    enrichmentExtracted: true as const,
+  };
+  if (fields.placa) out.placa = fields.placa;
+  if (fields.evoId) out.evoId = fields.evoId;
+  if (fields.codiId) out.codiId = fields.codiId;
+  if (fields.expirationDate) out.expirationDate = fields.expirationDate;
+  if (fields.folioNumber) out.folioNumber = fields.folioNumber;
+  if (fields.loteId) out.loteId = fields.loteId;
+  if (fields.procedureCategory) out.procedureCategory = fields.procedureCategory;
+  if (fields.tramiteId) out.tramiteId = fields.tramiteId;
+  if (fields.userId) out.userId = fields.userId;
+  return out;
+}
+
+/** Carga DynamoDB → Convex por lotes (incluye enriquecimiento: RFC, placa, etc. en un solo paso). */
 export const fetchDatamappingAndIngest = action({
   args: {
     sinceDate: v.string(),
     exclusiveStartKey: v.optional(v.string()),
   },
   handler: async (ctx, { sinceDate, exclusiveStartKey }) => {
-    type DatamappingRec = {
-      referencia: string;
-      monto: number;
-      fechaPago?: string;
-      fuente?: string;
-      urlPago?: string;
-      tipoMovimiento?: string;
-      updatedAt: string;
-      rawJson: string;
+    type DatamappingRec = ReturnType<typeof mapDynamoItemToRecord> & {
+      rfc?: string;
+      placa?: string;
+      evoId?: string;
+      codiId?: string;
+      expirationDate?: string;
+      folioNumber?: string;
+      loteId?: string;
+      procedureCategory?: string;
+      tramiteId?: string;
+      userId?: string;
+      enrichmentExtracted?: true;
     };
     const records: DatamappingRec[] = [];
     let cursor: string | undefined = exclusiveStartKey;
@@ -320,9 +402,8 @@ export const fetchDatamappingAndIngest = action({
         cursor
       );
       for (const item of items) {
-        records.push(
-          mapDynamoItemToRecord(item as Record<string, unknown>)
-        );
+        const rec = mapDynamoItemToRecord(item as Record<string, unknown>);
+        records.push(withEnrichment(rec) as DatamappingRec);
         if (records.length >= MAX_ITEMS_PER_ACTION) break;
       }
       cursor = lastEvaluatedKey ?? undefined;
@@ -349,7 +430,7 @@ export const fetchDatamappingAndIngest = action({
   },
 });
 
-/** Extrae un solo día de DynamoDB (updatedAt en ese día) y upserta en datamappingRecords. */
+/** Extrae un solo día de DynamoDB (updatedAt en ese día) y upserta en datamappingRecords (con enriquecimiento). */
 export const fetchDatamappingForDay = action({
   args: {
     year: v.number(),
@@ -360,24 +441,30 @@ export const fetchDatamappingForDay = action({
     let inserted = 0;
     let updated = 0;
     let batchCount = 0;
-    type DatamappingRec = {
-      referencia: string;
-      monto: number;
-      fechaPago?: string;
-      fuente?: string;
-      urlPago?: string;
-      tipoMovimiento?: string;
-      updatedAt: string;
-      rawJson: string;
+    type DatamappingRec = ReturnType<typeof mapDynamoItemToRecord> & {
+      rfc?: string;
+      placa?: string;
+      evoId?: string;
+      codiId?: string;
+      expirationDate?: string;
+      folioNumber?: string;
+      loteId?: string;
+      procedureCategory?: string;
+      tramiteId?: string;
+      userId?: string;
+      enrichmentExtracted?: true;
     };
     const batch: DatamappingRec[] = [];
 
+    let maxUpdatedAt = "";
     for await (const item of queryDatamappingPagoValidadoForDay(
       year,
       month,
       day
     )) {
-      batch.push(mapDynamoItemToRecord(item as Record<string, unknown>));
+      const rec = mapDynamoItemToRecord(item as Record<string, unknown>);
+      if (rec.updatedAt > maxUpdatedAt) maxUpdatedAt = rec.updatedAt;
+      batch.push(withEnrichment(rec) as DatamappingRec);
       if (batch.length >= DATAMAPPING_INGEST_BATCH) {
         const result = (await ctx.runMutation(
           api.mutations.upsertDatamappingBatch,
@@ -398,15 +485,598 @@ export const fetchDatamappingForDay = action({
       updated += result.updated;
       batchCount += 1;
     }
-    return { inserted, updated, batchCount, day };
+    return {
+      inserted,
+      updated,
+      batchCount,
+      day,
+      maxUpdatedAt: maxUpdatedAt || null,
+    };
   },
 });
 
-/** Explora DynamoDB: devuelve las keys del primer item con status PAGO VALIDADO y updatedAt > sinceDate (para confirmar nombres de atributos). */
+/**
+ * Procesa un chunk (una página) de un día de DynamoDB.
+ * Para evitar 524/600s: cada llamada hace 1 página DynamoDB + ~7 batches de upsert.
+ * El caller (Inngest) hace un bucle hasta hasMore=false.
+ */
+export const fetchDatamappingForDayChunk = action({
+  args: {
+    year: v.number(),
+    month: v.number(),
+    day: v.number(),
+    exclusiveStartKey: v.optional(v.string()),
+  },
+  handler: async (ctx, { year, month, day, exclusiveStartKey }) => {
+    let inserted = 0;
+    let updated = 0;
+    let maxUpdatedAt = "";
+    type DatamappingRec = {
+      transactionId: string;
+      referencia: string;
+      monto: number;
+      fechaPago?: string;
+      fuente?: string;
+      urlPago?: string;
+      tipoMovimiento?: string;
+      updatedAt: string;
+      rawJson: string;
+    };
+
+    const { items, lastEvaluatedKey } = await queryDatamappingPageForDay(
+      year,
+      month,
+      day,
+      exclusiveStartKey
+    );
+
+    const records: DatamappingRec[] = items.map((item) =>
+      withEnrichment(mapDynamoItemToRecord(item as Record<string, unknown>)) as DatamappingRec
+    );
+    for (const rec of records) {
+      if (rec.updatedAt > maxUpdatedAt) maxUpdatedAt = rec.updatedAt;
+    }
+
+    for (let i = 0; i < records.length; i += DATAMAPPING_INGEST_BATCH) {
+      const batch = records.slice(i, i + DATAMAPPING_INGEST_BATCH);
+      const result = (await ctx.runMutation(
+        api.mutations.upsertDatamappingBatch,
+        { records: batch }
+      )) as { inserted: number; updated: number };
+      inserted += result.inserted;
+      updated += result.updated;
+    }
+
+    return {
+      inserted,
+      updated,
+      hasMore: lastEvaluatedKey != null,
+      exclusiveStartKey: lastEvaluatedKey ?? null,
+      maxUpdatedAt: maxUpdatedAt || null,
+    };
+  },
+});
+
+/** Extrae un mes completo de DynamoDB (updatedAt en ese mes) y upserta en datamappingRecords. Para carga histórica: 1 job por mes. */
+export const fetchDatamappingForMonth = action({
+  args: {
+    year: v.number(),
+    month: v.number(),
+  },
+  handler: async (ctx, { year, month }) => {
+    let inserted = 0;
+    let updated = 0;
+    let maxUpdatedAt = "";
+    let cursor: string | undefined;
+    do {
+      const { items, lastEvaluatedKey } = await queryDatamappingPageForMonth(
+        year,
+        month,
+        cursor
+      );
+      for (let i = 0; i < items.length; i += DATAMAPPING_INGEST_BATCH) {
+        const batch = items
+          .slice(i, i + DATAMAPPING_INGEST_BATCH)
+          .map((item) =>
+            withEnrichment(mapDynamoItemToRecord(item as Record<string, unknown>))
+          );
+        for (const rec of batch) {
+          if (rec.updatedAt > maxUpdatedAt) maxUpdatedAt = rec.updatedAt;
+        }
+        const result = (await ctx.runMutation(
+          api.mutations.upsertDatamappingBatch,
+          { records: batch }
+        )) as { inserted: number; updated: number };
+        inserted += result.inserted;
+        updated += result.updated;
+      }
+      cursor = lastEvaluatedKey ?? undefined;
+    } while (cursor);
+    return { inserted, updated, year, month, maxUpdatedAt: maxUpdatedAt || null };
+  },
+});
+
+/** Extracción incremental: desde la última marca de agua (updatedAt). Para ejecución periódica (cada hora/5 min). Si no hay marca, retorna sin procesar (ejecutar histórico primero). */
+export const fetchDatamappingIncremental = action({
+  args: {},
+  handler: async (
+    ctx: ActionCtx
+  ): Promise<{
+    inserted: number;
+    updated: number;
+    processed: number;
+    newWatermark: string | null;
+    message?: string;
+  }> => {
+    const watermarkDoc = await ctx.runQuery(
+      api.queries.getDatamappingWatermark,
+      {}
+    );
+    const sinceDate = watermarkDoc?.lastUpdatedAt;
+    if (!sinceDate) {
+      return {
+        inserted: 0,
+        updated: 0,
+        processed: 0,
+        newWatermark: null,
+        message: "No hay marca de agua. Ejecutar histórico completo primero.",
+      };
+    }
+    const records: Array<ReturnType<typeof mapDynamoItemToRecord> & { rfc?: string; placa?: string; evoId?: string; codiId?: string; expirationDate?: string; folioNumber?: string; loteId?: string; procedureCategory?: string; tramiteId?: string; userId?: string; enrichmentExtracted?: true }> = [];
+    let cursor: string | undefined;
+    let maxUpdatedAt = sinceDate;
+
+    do {
+      const { items, lastEvaluatedKey } = await queryDatamappingPage(
+        sinceDate,
+        cursor
+      );
+      for (const item of items) {
+        const rec = mapDynamoItemToRecord(item as Record<string, unknown>);
+        const enriched = withEnrichment(rec);
+        records.push(enriched);
+        if (rec.updatedAt > maxUpdatedAt) maxUpdatedAt = rec.updatedAt;
+      }
+      if (records.length >= MAX_ITEMS_PER_ACTION) break;
+      cursor = lastEvaluatedKey ?? undefined;
+    } while (cursor);
+
+    let totalInserted = 0;
+    let totalUpdated = 0;
+    for (let i = 0; i < records.length; i += DATAMAPPING_INGEST_BATCH) {
+      const batch = records.slice(i, i + DATAMAPPING_INGEST_BATCH);
+      const result = (await ctx.runMutation(
+        api.mutations.upsertDatamappingBatch,
+        { records: batch }
+      )) as { inserted: number; updated: number };
+      totalInserted += result.inserted;
+      totalUpdated += result.updated;
+    }
+
+    if (records.length > 0 && maxUpdatedAt !== sinceDate) {
+      await ctx.runMutation(api.mutations.setDatamappingWatermark, {
+        lastUpdatedAt: maxUpdatedAt,
+      });
+    }
+
+    return {
+      inserted: totalInserted,
+      updated: totalUpdated,
+      processed: records.length,
+      newWatermark: records.length > 0 ? maxUpdatedAt : sinceDate,
+    };
+  },
+});
+
+/** Explora DynamoDB: devuelve las keys del primer item con updatedAt > sinceDate (para confirmar nombres de atributos). */
 export const exploreDatamappingAttributes = action({
   args: { sinceDate: v.string() },
   handler: async (_ctx, { sinceDate }) => {
     return listFirstItemAttributes(sinceDate);
+  },
+});
+
+/**
+ * Códigos de movimiento que típicamente tienen RFC (declaraciones, impuestos, etc.).
+ * Solo se procesan registros con tipoMovimiento en esta lista; el resto se omite.
+ */
+const DEFAULT_MOVEMENT_CODES_WITH_RFC = new Set([
+  "DENOM", "REFRENDO", "PREDIAL", "IAR", "IECSA", "DEAUT", "DEHOS",
+  "IVFBA", "IEGA", "IPREEM", "OUGTBI",
+]);
+
+type MovementCodesConfig = {
+  descriptions: Record<string, string>;
+  aliases: Record<string, string>;
+};
+
+/** Construye rango updatedAt para enriquecimiento (todos los registros con enrichmentExtracted false). */
+function getEnrichmentDateRange(
+  fromDate: string,
+  toDate: string | undefined
+): { updatedAtFrom: string; updatedAtTo: string } {
+  const updatedAtFrom = fromDate.includes("T") ? fromDate : `${fromDate}T00:00:00.000Z`;
+  const to = toDate ?? new Date().toISOString().slice(0, 10);
+  const [y, m, d] = to.includes("T") ? to.slice(0, 10).split("-").map(Number) : to.split("-").map(Number);
+  const nextDay = new Date(Date.UTC(y, m - 1, d + 1));
+  const updatedAtTo = nextDay.toISOString().replace(/\.\d{3}Z$/, ".000Z");
+  return { updatedAtFrom, updatedAtTo };
+}
+
+/**
+ * Preflight: cuenta cuántos registros faltan por enriquecer (enrichmentExtracted === false) en el rango de fechas.
+ * No filtra por tipo de movimiento. Rápido: solo pide _id por página, sin rawJson.
+ */
+export const getDatamappingEnrichmentPreflight = action({
+  args: {
+    fromDate: v.string(),
+    toDate: v.optional(v.string()),
+  },
+  handler: async (ctx, { fromDate, toDate }) => {
+    const { updatedAtFrom, updatedAtTo } = getEnrichmentDateRange(fromDate, toDate);
+    let totalToProcess = 0;
+    let cursor: string | null = null;
+    do {
+      const result = (await ctx.runQuery(api.queries.getDatamappingIdsNeedingEnrichment, {
+        updatedAtFrom,
+        updatedAtTo,
+        cursor,
+        numItems: 2000,
+      })) as { page: { _id: unknown }[]; isDone: boolean; continueCursor: string | null };
+      totalToProcess += result.page.length;
+      cursor = result.continueCursor;
+    } while (cursor);
+    return { totalToProcess, updatedAtFrom, updatedAtTo };
+  },
+});
+
+type RfcEnrichmentRunId = import("./_generated/dataModel").Id<"rfcEnrichmentRuns">;
+
+async function updateEnrichmentRun(
+  ctx: ActionCtx,
+  runId: RfcEnrichmentRunId | undefined,
+  payload: {
+    status: "completed" | "timed_out" | "error";
+    processed?: number;
+    enriched?: number;
+    message?: string;
+    continueState?:
+      | { tipoMovIndex: number; cursor: string | null; tipoMovOrder: string[] }
+      | { cursor: string | null; updatedAtFrom: string; updatedAtTo: string };
+  }
+): Promise<void> {
+  if (!runId) return;
+  await ctx.runMutation(api.mutations.updateRfcEnrichmentRun, { runId, ...payload });
+}
+
+/**
+ * Enriquecer datamappingRecords: extrae RFC + placa, evoId, etc. de rawJson (según existan).
+ * Procesa todos los registros con enrichmentExtracted === false (sin filtrar por tipo de movimiento).
+ * Marca enrichmentExtracted: true para no reprocesar salvo rerun explícito. Resumible con continueState.
+ */
+export const enrichDatamappingWithRfc = action({
+  args: {
+    fromDate: v.string(),
+    toDate: v.optional(v.string()),
+    /** Ignorado: se procesan todos los registros pendientes en el rango. Mantenido por compatibilidad. */
+    movementCodesWithRfc: v.optional(v.array(v.string())),
+    /** Para reanudar; lo devuelve la acción al hacer timeout. Acepta formato nuevo { cursor, updatedAtFrom, updatedAtTo } o legacy { tipoMovIndex, cursor, tipoMovOrder }. */
+    continueState: v.optional(v.union(
+      v.object({
+        cursor: v.union(v.string(), v.null()),
+        updatedAtFrom: v.string(),
+        updatedAtTo: v.string(),
+      }),
+      v.object({
+        tipoMovIndex: v.number(),
+        cursor: v.union(v.string(), v.null()),
+        tipoMovOrder: v.array(v.string()),
+      })
+    )),
+    runId: v.optional(v.id("rfcEnrichmentRuns")),
+    maxDurationMs: v.optional(v.number()),
+  },
+  handler: async (ctx, { fromDate, toDate, continueState, runId, maxDurationMs }) => {
+    const startMs = Date.now();
+    const timeLimitMs = maxDurationMs ?? ACTION_TIME_LIMIT_MS;
+    let processed = 0;
+    let enriched = 0;
+    try {
+      const hasNewState =
+        continueState != null &&
+        "updatedAtFrom" in continueState &&
+        "updatedAtTo" in continueState;
+      const { updatedAtFrom, updatedAtTo } = hasNewState
+        ? { updatedAtFrom: continueState.updatedAtFrom, updatedAtTo: continueState.updatedAtTo }
+        : getEnrichmentDateRange(fromDate, toDate);
+
+      /** Páginas más pequeñas = menos rawJson por vuelta; más vueltas por ventana 85s y menos timeout. */
+      const ENRICHMENT_PAGE_SIZE = 50;
+      const PATCH_BATCH = 50;
+      type Id = import("./_generated/dataModel").Id<"datamappingRecords">;
+      type PageRec = { _id: Id; rawJson: string };
+
+      let cursor: string | null = continueState?.cursor ?? null;
+
+      do {
+        if (Date.now() - startMs > timeLimitMs) {
+          const message =
+            "Límite de tiempo alcanzado. Vuelve a ejecutar con el mismo rango para continuar (se reanudará donde quedó).";
+          const continueStateOut = { cursor, updatedAtFrom, updatedAtTo };
+          await updateEnrichmentRun(ctx, runId, {
+            status: "timed_out",
+            processed,
+            enriched,
+            message,
+            continueState: continueStateOut,
+          });
+          return {
+            processed,
+            enriched,
+            timedOut: true,
+            message,
+            continueState: continueStateOut,
+            isDone: false,
+          };
+        }
+
+        let result: {
+          page: PageRec[];
+          isDone: boolean;
+          continueCursor: string | null;
+        };
+        try {
+          result = (await ctx.runQuery(
+            api.queries.getDatamappingPageWithRawJsonNeedingEnrichment,
+            {
+              updatedAtFrom,
+              updatedAtTo,
+              cursor,
+              numItems: ENRICHMENT_PAGE_SIZE,
+            }
+          )) as typeof result;
+        } catch (e) {
+          throw sanitizeConvexResponseError(e);
+        }
+
+        const batch: Array<{
+          id: Id;
+          rfc: string;
+          placa?: string;
+          evoId?: string;
+          codiId?: string;
+          expirationDate?: string;
+          folioNumber?: string;
+          loteId?: string;
+          procedureCategory?: string;
+          tramiteId?: string;
+          userId?: string;
+        }> = [];
+        for (const rec of result.page) {
+          processed += 1;
+          const fields = extractEnrichmentFieldsFromRawJson(rec.rawJson);
+          if (fields.rfc) enriched += 1;
+          const update: { id: Id; rfc: string; [k: string]: string | Id | undefined } = {
+            id: rec._id,
+            rfc: fields.rfc,
+          };
+          const optionalKeys = [
+            "placa",
+            "evoId",
+            "codiId",
+            "expirationDate",
+            "folioNumber",
+            "loteId",
+            "procedureCategory",
+            "tramiteId",
+            "userId",
+          ] as const;
+          for (const k of optionalKeys) {
+            const v = fields[k];
+            if (v !== undefined && v !== "") update[k] = v;
+          }
+          batch.push(update);
+        }
+        if (batch.length > 0) {
+          for (let j = 0; j < batch.length; j += PATCH_BATCH) {
+            const chunk = batch.slice(j, j + PATCH_BATCH);
+            await ctx.runMutation(api.mutations.patchDatamappingRfcBatch, { updates: chunk });
+          }
+        }
+
+        cursor = result.continueCursor;
+      } while (cursor);
+
+      await updateEnrichmentRun(ctx, runId, {
+        status: "completed",
+        processed,
+        enriched,
+      });
+      return {
+        processed,
+        enriched,
+        isDone: true,
+      };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      await updateEnrichmentRun(ctx, runId, {
+        status: "error",
+        processed,
+        enriched,
+        message,
+      });
+      throw err;
+    }
+  },
+});
+
+/** Margen para backfill: detenerse antes del límite 600s de Convex (500s = 100s margen). */
+const BACKFILL_TIME_LIMIT_MS = 500_000;
+
+/**
+ * Backfill reanudable: marca enrichmentExtracted: false en todos los datamappingRecords.
+ * Así todos quedan pendientes de enriquecer (el siguiente enriquecimiento los procesará).
+ * Ejecutar una vez tras añadir el campo/índice. Si hace timeout, volver a llamar con el cursor devuelto.
+ */
+export const backfillDatamappingEnrichmentExtracted = action({
+  args: {
+    cursor: v.optional(v.union(v.string(), v.null())),
+  },
+  handler: async (ctx, { cursor: startCursor }) => {
+    const startMs = Date.now();
+    /** 100 por lote para que la mutation termine en <1s (límite Convex). */
+    const BATCH = 100;
+    let cursor: string | null = startCursor ?? null;
+    let total = 0;
+
+    try {
+      do {
+        if (Date.now() - startMs > BACKFILL_TIME_LIMIT_MS) {
+          return {
+            total,
+            cursor,
+            timedOut: true,
+            message: "Límite de tiempo. Vuelve a ejecutar con el cursor devuelto para continuar.",
+          };
+        }
+
+        let result: { page: Array<{ _id: unknown }>; continueCursor: string | null };
+        try {
+          result = (await ctx.runQuery(
+            api.queries.getDatamappingPageIdForBackfill,
+            { cursor, numItems: BATCH }
+          )) as typeof result;
+        } catch (e) {
+          throw sanitizeConvexResponseError(e);
+        }
+
+        const updates = result.page.map((r) => ({
+          id: r._id as import("./_generated/dataModel").Id<"datamappingRecords">,
+          enrichmentExtracted: false,
+        }));
+        if (updates.length > 0) {
+          try {
+            await ctx.runMutation(api.mutations.backfillDatamappingEnrichmentExtractedBatch, {
+              updates,
+            });
+          } catch (e) {
+            throw sanitizeConvexResponseError(e);
+          }
+          total += updates.length;
+        }
+        cursor = result.continueCursor;
+      } while (cursor);
+
+      return { total, cursor: null, timedOut: false };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      throw new Error(`Backfill enrichmentExtracted: ${message}`);
+    }
+  },
+});
+
+/** Límite por llamada para Inngest (evitar timeout 524 del proxy). */
+const BACKFILL_FOR_RANGE_MAX_MS = 85_000;
+
+/**
+ * Backfill por rango updatedAt: marca enrichmentExtracted: false y elimina rfcExtracted.
+ * Para usar desde Inngest por mes (un step por mes en paralelo). Devuelve isDone cuando el rango está completo.
+ */
+export const backfillDatamappingEnrichmentExtractedForRange = action({
+  args: {
+    updatedAtFrom: v.string(),
+    updatedAtTo: v.string(),
+    cursor: v.optional(v.union(v.string(), v.null())),
+    maxDurationMs: v.optional(v.number()),
+  },
+  handler: async (ctx, { updatedAtFrom, updatedAtTo, cursor: startCursor, maxDurationMs: maxMs }) => {
+    const startMs = Date.now();
+    const limitMs = maxMs ?? BACKFILL_FOR_RANGE_MAX_MS;
+    /** Lotes de 100 para que la mutation termine en <1s (límite Convex) y no devuelva 500. */
+    const BATCH = 100;
+    let cursor: string | null = startCursor ?? null;
+    let total = 0;
+
+    try {
+      do {
+        if (Date.now() - startMs > limitMs) {
+          return {
+            total,
+            cursor,
+            timedOut: true,
+            isDone: false,
+            message: "Límite de tiempo. Inngest reanudará con el cursor.",
+          };
+        }
+
+        let result: { page: Array<{ _id: unknown }>; continueCursor: string | null };
+        try {
+          result = (await ctx.runQuery(
+            api.queries.getDatamappingPageIdForBackfillByRange,
+            { updatedAtFrom, updatedAtTo, cursor, numItems: BATCH }
+          )) as { page: Array<{ _id: unknown }>; continueCursor: string | null };
+        } catch (e) {
+          throw sanitizeConvexResponseError(e);
+        }
+
+        const updates = result.page.map((r) => ({
+          id: r._id as import("./_generated/dataModel").Id<"datamappingRecords">,
+          enrichmentExtracted: false,
+        }));
+        if (updates.length > 0) {
+          try {
+            await ctx.runMutation(api.mutations.backfillDatamappingEnrichmentExtractedBatch, {
+              updates,
+            });
+          } catch (e) {
+            throw sanitizeConvexResponseError(e);
+          }
+          total += updates.length;
+        }
+        cursor = result.continueCursor;
+      } while (cursor);
+
+      return { total, cursor: null, timedOut: false, isDone: true };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      throw new Error(`Backfill enrichmentExtracted (rango): ${message}`);
+    }
+  },
+});
+
+/**
+ * Ejecuta la investigación RFC (rango: 1 enero a hoy), guarda resultados en rfcInvestigationResults.
+ */
+export const runRfcInvestigationAndSave = action({
+  args: {
+    rfcs: v.array(v.string()),
+  },
+  handler: async (ctx, { rfcs }) => {
+    const fromDate = "2026-01-01";
+    const today = new Date();
+    const toDate = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
+
+    const matches = (await ctx.runQuery(api.queries.getDatamappingRecordsByRfcs, {
+      rfcs,
+      fromDate,
+      toDate,
+    })) as Array<{
+      rfc: string;
+      referencia: string;
+      monto: number;
+      updatedAt: string;
+      tipoMovimiento?: string;
+      fuente?: string;
+    }>;
+
+    await ctx.runMutation(api.mutations.insertRfcInvestigationResults, {
+      fromDate,
+      toDate,
+      matchCount: matches.length,
+      matches,
+    });
+
+    return { matchCount: matches.length, fromDate, toDate };
   },
 });
 

@@ -10,7 +10,6 @@ import { unmarshall } from "@aws-sdk/util-dynamodb";
 
 const DATAMAPPING_INDEX = "DateIndex";
 const SYNC_GROUP = 1;
-const STATUS_PAGO_VALIDADO = "PAGO VALIDADO";
 
 function getDynamoClient(): DynamoDBClient {
   return new DynamoDBClient({
@@ -62,12 +61,9 @@ export async function queryDatamappingPage(
       TableName: tableName,
       IndexName: DATAMAPPING_INDEX,
       KeyConditionExpression: "syncGroup = :sg AND updatedAt > :dt",
-      FilterExpression: "#st = :status",
-      ExpressionAttributeNames: { "#st": "status" },
       ExpressionAttributeValues: {
         ":sg": { S: String(SYNC_GROUP) },
         ":dt": { S: sinceDate },
-        ":status": { S: STATUS_PAGO_VALIDADO },
       },
       Limit: DATAMAPPING_PAGE_LIMIT,
       ExclusiveStartKey: lastKey,
@@ -83,8 +79,8 @@ export async function queryDatamappingPage(
 }
 
 /**
- * Query DynamoDB GSI DateIndex for items with syncGroup=1, updatedAt > sinceDate,
- * and FilterExpression status = "PAGO VALIDADO". Paginates until no more results.
+ * Query DynamoDB GSI DateIndex for items with syncGroup=1, updatedAt > sinceDate.
+ * Extrae todos los registros (sin filtrar por status). Paginates until no more results.
  * @param sinceDate - e.g. "2026-01-01" or "2026-01-01T00:00:00.000Z"
  */
 export async function* queryDatamappingPagoValidadoSince(
@@ -99,14 +95,10 @@ export async function* queryDatamappingPagoValidadoSince(
       new QueryCommand({
         TableName: tableName,
         IndexName: DATAMAPPING_INDEX,
-        KeyConditionExpression:
-          "syncGroup = :sg AND updatedAt > :dt",
-        FilterExpression: "#st = :status",
-        ExpressionAttributeNames: { "#st": "status" },
+        KeyConditionExpression: "syncGroup = :sg AND updatedAt > :dt",
         ExpressionAttributeValues: {
           ":sg": { S: String(SYNC_GROUP) },
           ":dt": { S: sinceDate },
-          ":status": { S: STATUS_PAGO_VALIDADO },
         },
         ExclusiveStartKey: lastKey,
       })
@@ -120,21 +112,69 @@ export async function* queryDatamappingPagoValidadoSince(
   } while (lastKey);
 }
 
-/** Fecha en rango para un día: YYYY-MM-DD y YYYY-MM-DD del día siguiente (para updatedAt < dtEnd). */
+/** Rango updatedAt para un día: primer y último instante (para BETWEEN inclusivo). DynamoDB solo permite una condición por clave. */
 function dayRangeStrings(
   year: number,
   month: number,
   day: number
-): { start: string; end: string } {
+): { start: string; endInclusive: string } {
   const pad = (n: number) => String(n).padStart(2, "0");
   const start = `${year}-${pad(month)}-${pad(day)}`;
-  const next = new Date(year, month - 1, day + 1);
-  const end = `${next.getFullYear()}-${pad(next.getMonth() + 1)}-${pad(next.getDate())}`;
-  return { start, end };
+  const endInclusive = `${year}-${pad(month)}-${pad(day)}T23:59:59.999Z`;
+  return { start, endInclusive };
 }
 
 /**
- * Query DynamoDB GSI DateIndex para un solo día: syncGroup=1, updatedAt en [start, end), status=PAGO VALIDADO.
+ * Una página de DynamoDB GSI DateIndex para un solo día.
+ * syncGroup=1, updatedAt en [start, end). Usar Limit + ExclusiveStartKey para procesar por chunks (evita 524/600s).
+ */
+export async function queryDatamappingPageForDay(
+  year: number,
+  month: number,
+  day: number,
+  exclusiveStartKey?: string
+): Promise<{
+  items: Record<string, unknown>[];
+  lastEvaluatedKey: string | null;
+}> {
+  const client = getDynamoClient();
+  const tableName = getTableName();
+  const { start: dtStart, endInclusive: dtEnd } = dayRangeStrings(year, month, day);
+  let lastKey: Record<string, AttributeValue> | undefined = undefined;
+  if (exclusiveStartKey) {
+    try {
+      lastKey = JSON.parse(exclusiveStartKey) as Record<string, AttributeValue>;
+    } catch {
+      lastKey = undefined;
+    }
+  }
+  const response: QueryCommandOutput = await client.send(
+    new QueryCommand({
+      TableName: tableName,
+      IndexName: DATAMAPPING_INDEX,
+      KeyConditionExpression:
+        "syncGroup = :sg AND updatedAt BETWEEN :dtStart AND :dtEnd",
+      ExpressionAttributeValues: {
+        ":sg": { S: String(SYNC_GROUP) },
+        ":dtStart": { S: dtStart },
+        ":dtEnd": { S: dtEnd },
+      },
+      Limit: DATAMAPPING_PAGE_LIMIT,
+      ExclusiveStartKey: lastKey,
+    })
+  );
+  const items = (response.Items ?? []).map((item) =>
+    unmarshall(item) as Record<string, unknown>
+  );
+  const nextKey = response.LastEvaluatedKey
+    ? JSON.stringify(response.LastEvaluatedKey)
+    : null;
+  return { items, lastEvaluatedKey: nextKey };
+}
+
+/**
+ * Query DynamoDB GSI DateIndex para un solo día: syncGroup=1, updatedAt en [start, end).
+ * Extrae todos los registros (sin filtrar por status).
  */
 export async function* queryDatamappingPagoValidadoForDay(
   year: number,
@@ -143,7 +183,7 @@ export async function* queryDatamappingPagoValidadoForDay(
 ): AsyncGenerator<Record<string, unknown>> {
   const client = getDynamoClient();
   const tableName = getTableName();
-  const { start: dtStart, end: dtEnd } = dayRangeStrings(year, month, day);
+  const { start: dtStart, endInclusive: dtEnd } = dayRangeStrings(year, month, day);
   let lastKey: Record<string, AttributeValue> | undefined = undefined;
 
   do {
@@ -152,14 +192,11 @@ export async function* queryDatamappingPagoValidadoForDay(
         TableName: tableName,
         IndexName: DATAMAPPING_INDEX,
         KeyConditionExpression:
-          "syncGroup = :sg AND updatedAt >= :dtStart AND updatedAt < :dtEnd",
-        FilterExpression: "#st = :status",
-        ExpressionAttributeNames: { "#st": "status" },
+          "syncGroup = :sg AND updatedAt BETWEEN :dtStart AND :dtEnd",
         ExpressionAttributeValues: {
           ":sg": { S: String(SYNC_GROUP) },
           ":dtStart": { S: dtStart },
           ":dtEnd": { S: dtEnd },
-          ":status": { S: STATUS_PAGO_VALIDADO },
         },
         ExclusiveStartKey: lastKey,
       })
@@ -173,11 +210,73 @@ export async function* queryDatamappingPagoValidadoForDay(
   } while (lastKey);
 }
 
+/** Rango updatedAt para un mes: primer y último instante del mes (para BETWEEN inclusivo). DynamoDB solo permite una condición por clave, no ">= X AND < Y". */
+function monthRangeStrings(year: number, month: number): {
+  dtStart: string;
+  dtEndInclusive: string;
+} {
+  const pad = (n: number) => String(n).padStart(2, "0");
+  const dtStart = `${year}-${pad(month)}-01`;
+  const lastDay = new Date(year, month, 0).getDate();
+  const dtEndInclusive = `${year}-${pad(month)}-${pad(lastDay)}T23:59:59.999Z`;
+  return { dtStart, dtEndInclusive };
+}
+
+/**
+ * Query DynamoDB GSI DateIndex para un mes completo: syncGroup=1,
+ * updatedAt en [firstDay, firstDayNextMonth).
+ * Extrae todos los registros (sin filtrar por status). Paginado para procesar ~30k-100k+ por mes sin timeout.
+ */
+export async function queryDatamappingPageForMonth(
+  year: number,
+  month: number,
+  exclusiveStartKey?: string
+): Promise<{
+  items: Record<string, unknown>[];
+  lastEvaluatedKey: string | null;
+}> {
+  const client = getDynamoClient();
+  const tableName = getTableName();
+  const { dtStart, dtEndInclusive } = monthRangeStrings(year, month);
+  let lastKey: Record<string, AttributeValue> | undefined = undefined;
+  if (exclusiveStartKey) {
+    try {
+      lastKey = JSON.parse(exclusiveStartKey) as Record<string, AttributeValue>;
+    } catch {
+      lastKey = undefined;
+    }
+  }
+  const response: QueryCommandOutput = await client.send(
+    new QueryCommand({
+      TableName: tableName,
+      IndexName: DATAMAPPING_INDEX,
+      KeyConditionExpression:
+        "syncGroup = :sg AND updatedAt BETWEEN :dtStart AND :dtEnd",
+      ExpressionAttributeValues: {
+        ":sg": { S: String(SYNC_GROUP) },
+        ":dtStart": { S: dtStart },
+        ":dtEnd": { S: dtEndInclusive },
+      },
+      Limit: DATAMAPPING_PAGE_LIMIT,
+      ExclusiveStartKey: lastKey,
+    })
+  );
+  const items = (response.Items ?? []).map((item) =>
+    unmarshall(item) as Record<string, unknown>
+  );
+  const nextKey = response.LastEvaluatedKey
+    ? JSON.stringify(response.LastEvaluatedKey)
+    : null;
+  return { items, lastEvaluatedKey: nextKey };
+}
+
 /**
  * Maps a DynamoDB item (plain object after unmarshall) to the Convex datamappingRecords shape.
- * Tries common attribute name variants (referencia, total_pagar, fecha de pago, etc.).
+ * transactionId siempre está presente en DynamoDB (llave única).
+ * referencia puede no existir y eso es válido.
  */
 export function mapDynamoItemToRecord(item: Record<string, unknown>): {
+  transactionId: string;
   referencia: string;
   monto: number;
   fechaPago?: string;
@@ -200,8 +299,14 @@ export function mapDynamoItemToRecord(item: Record<string, unknown>): {
     return Number.isNaN(n) ? 0 : n;
   };
 
+  const transactionId =
+    str("transactionId") ||
+    str("TransactionId") ||
+    str("transaction_id") ||
+    str("id") ||
+    str("Id");
   const referencia =
-    str("referencia") || str("Referencia") || str("reference");
+    str("referencia") || str("Referencia") || str("reference") || "";
   const monto =
     num("monto", "total_pagar") ||
     num("total_pagar", "monto") ||
@@ -226,7 +331,15 @@ export function mapDynamoItemToRecord(item: Record<string, unknown>): {
   const updatedAt = str("updatedAt") || str("UpdatedAt");
 
   return {
-    referencia: referencia || "unknown",
+    transactionId: (() => {
+      if (!transactionId) {
+        throw new Error(
+          `DynamoDB item sin transactionId (obligatorio): keys=${JSON.stringify(Object.keys(item))}`
+        );
+      }
+      return transactionId;
+    })(),
+    referencia: referencia || "",
     monto,
     ...(fechaPago ? { fechaPago } : {}),
     ...(fuente ? { fuente } : {}),
@@ -235,6 +348,136 @@ export function mapDynamoItemToRecord(item: Record<string, unknown>): {
     updatedAt: updatedAt || new Date().toISOString(),
     rawJson: JSON.stringify(item),
   };
+}
+
+/** RFC mexicano: 12-13 caracteres alfanuméricos (ej. BBA030609AM8, XAXX010101000). */
+const RFC_PATTERN = /^[A-ZÑ&]{3,4}\d{6}[A-Z0-9]{2}[0-9A]?$/i;
+
+function looksLikeRfc(s: string): boolean {
+  const trimmed = String(s ?? "").trim();
+  return trimmed.length >= 10 && trimmed.length <= 14 && RFC_PATTERN.test(trimmed);
+}
+
+function extractRfcFromObj(obj: unknown): string | undefined {
+  if (obj == null || typeof obj !== "object") return undefined;
+  const o = obj as Record<string, unknown>;
+  const keys = [
+    "rfc",
+    "RFC",
+    "contribuyenteRfc",
+    "contribuyente_rfc",
+    "rfcContribuyente",
+  ];
+  for (const k of keys) {
+    const v = o[k];
+    if (typeof v === "string" && looksLikeRfc(v)) return v.trim().toUpperCase();
+  }
+  const contribuyente = o.contribuyente ?? o.contribuyenteData ?? o.datosContribuyente;
+  if (contribuyente && typeof contribuyente === "object") {
+    const r = extractRfcFromObj(contribuyente);
+    if (r) return r;
+  }
+  for (const v of Object.values(o)) {
+    if (typeof v === "string" && looksLikeRfc(v)) return v.trim().toUpperCase();
+    if (v && typeof v === "object" && !Array.isArray(v)) {
+      const r = extractRfcFromObj(v);
+      if (r) return r;
+    }
+  }
+  return undefined;
+}
+
+/**
+ * Extrae RFC del rawJson de un registro datamapping.
+ * Busca en atributos comunes (rfc, contribuyenteRfc, etc.) y recursivamente en objetos anidados.
+ */
+export function extractRfcFromRawJson(rawJson: string): string | undefined {
+  try {
+    const parsed = JSON.parse(rawJson) as unknown;
+    return extractRfcFromObj(parsed);
+  } catch {
+    return undefined;
+  }
+}
+
+/** Devuelve el primer valor no nulo/undefined de obj para las claves dadas, normalizado a string. */
+function getFirstString(
+  obj: Record<string, unknown>,
+  ...keys: string[]
+): string | undefined {
+  for (const k of keys) {
+    const v = obj[k];
+    if (v === undefined || v === null) continue;
+    const s = typeof v === "string" ? v : String(v);
+    const trimmed = s.trim();
+    if (trimmed !== "") return trimmed;
+  }
+  return undefined;
+}
+
+/** Mapa campo → claves a buscar (orden) para extracción de enriquecimiento. */
+const ENRICHMENT_KEY_MAP: Record<
+  string,
+  string[]
+> = {
+  placa: ["placa", "plate", "Plate"],
+  evoId: ["evoId", "evo_id"],
+  codiId: ["codiId", "codi_id"],
+  expirationDate: [
+    "expirationDate",
+    "expiration_date",
+    "fechaPago",
+    "fechaDePago",
+  ],
+  folioNumber: ["folioNumber", "folio_number", "folio"],
+  loteId: ["loteId", "lote_id", "lote"],
+  procedureCategory: [
+    "procedureCategory",
+    "procedure_category",
+    "categoria",
+  ],
+  tramiteId: ["tramiteId", "tramite_id", "tramite"],
+  userId: ["userId", "user_id"],
+};
+
+export type EnrichmentFields = {
+  rfc: string;
+  placa?: string;
+  evoId?: string;
+  codiId?: string;
+  expirationDate?: string;
+  folioNumber?: string;
+  loteId?: string;
+  procedureCategory?: string;
+  tramiteId?: string;
+  userId?: string;
+};
+
+/**
+ * Extrae todos los campos de enriquecimiento del rawJson (RFC + placa, evoId, etc.).
+ * RFC usa la lógica existente; el resto busca claves a nivel raíz con alias camelCase/snake_case.
+ */
+export function extractEnrichmentFieldsFromRawJson(
+  rawJson: string
+): EnrichmentFields {
+  const rfc = extractRfcFromRawJson(rawJson) ?? "";
+  const out: EnrichmentFields = { rfc };
+
+  try {
+    const parsed = JSON.parse(rawJson) as unknown;
+    if (parsed == null || typeof parsed !== "object") return out;
+    const o = parsed as Record<string, unknown>;
+
+    for (const [field, keys] of Object.entries(ENRICHMENT_KEY_MAP)) {
+      const val = getFirstString(o, ...keys);
+      if (val !== undefined) {
+        (out as Record<string, string | undefined>)[field] = val;
+      }
+    }
+  } catch {
+    // keep only rfc
+  }
+  return out;
 }
 
 /**
@@ -251,12 +494,9 @@ export async function listFirstItemAttributes(
       TableName: tableName,
       IndexName: DATAMAPPING_INDEX,
       KeyConditionExpression: "syncGroup = :sg AND updatedAt > :dt",
-      FilterExpression: "#st = :status",
-      ExpressionAttributeNames: { "#st": "status" },
       ExpressionAttributeValues: {
         ":sg": { S: String(SYNC_GROUP) },
         ":dt": { S: sinceDate },
-        ":status": { S: STATUS_PAGO_VALIDADO },
       },
       Limit: 1,
     })

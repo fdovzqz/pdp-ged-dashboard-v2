@@ -458,6 +458,7 @@ export const deletePaymentsByReferencias = mutation({
 
 /** Validador para un registro de DynamoDB datamapping (reconciliación Enero 2026). */
 const datamappingRecordValidator = v.object({
+  transactionId: v.string(),
   referencia: v.string(),
   monto: v.number(),
   fechaPago: v.optional(v.string()),
@@ -466,12 +467,24 @@ const datamappingRecordValidator = v.object({
   tipoMovimiento: v.optional(v.string()),
   updatedAt: v.string(),
   rawJson: v.string(),
+  /** Enriquecimiento en la carga: RFC y campos extraídos de rawJson. Si se envían, se guardan y enrichmentExtracted: true. */
+  rfc: v.optional(v.string()),
+  placa: v.optional(v.string()),
+  evoId: v.optional(v.string()),
+  codiId: v.optional(v.string()),
+  expirationDate: v.optional(v.string()),
+  folioNumber: v.optional(v.string()),
+  loteId: v.optional(v.string()),
+  procedureCategory: v.optional(v.string()),
+  tramiteId: v.optional(v.string()),
+  userId: v.optional(v.string()),
+  enrichmentExtracted: v.optional(v.boolean()),
 });
 
 /**
- * Upserta un lote en datamappingRecords por referencia solamente:
- * si ya existe un doc con esa referencia, se actualiza (latest wins); si no, se inserta.
- * Así, si en DynamoDB actualizan un registro (misma referencia, nuevo updatedAt) no se duplica.
+ * Upserta un lote en datamappingRecords por transactionId (llave única en DynamoDB):
+ * si ya existe un doc con ese transactionId, se actualiza; si no, se inserta.
+ * Evita OCC al procesar meses en paralelo (cada transactionId aparece solo en un mes).
  */
 export const upsertDatamappingBatch = mutation({
   args: {
@@ -483,9 +496,16 @@ export const upsertDatamappingBatch = mutation({
     for (const rec of records) {
       const existing = await ctx.db
         .query("datamappingRecords")
-        .withIndex("by_referencia", (q) => q.eq("referencia", rec.referencia))
+        .withIndex("by_transactionId", (q) =>
+          q.eq("transactionId", rec.transactionId)
+        )
         .first();
+      const rfcVal =
+        rec.rfc !== undefined
+          ? (String(rec.rfc).trim() === "" ? "" : String(rec.rfc).trim().toUpperCase())
+          : undefined;
       const doc = {
+        transactionId: rec.transactionId,
         referencia: rec.referencia,
         monto: rec.monto,
         ...(rec.fechaPago !== undefined ? { fechaPago: rec.fechaPago } : {}),
@@ -496,6 +516,17 @@ export const upsertDatamappingBatch = mutation({
           : {}),
         updatedAt: rec.updatedAt,
         rawJson: rec.rawJson,
+        enrichmentExtracted: rec.enrichmentExtracted ?? false,
+        ...(rfcVal !== undefined ? { rfc: rfcVal } : {}),
+        ...(rec.placa !== undefined ? { placa: rec.placa } : {}),
+        ...(rec.evoId !== undefined ? { evoId: rec.evoId } : {}),
+        ...(rec.codiId !== undefined ? { codiId: rec.codiId } : {}),
+        ...(rec.expirationDate !== undefined ? { expirationDate: rec.expirationDate } : {}),
+        ...(rec.folioNumber !== undefined ? { folioNumber: rec.folioNumber } : {}),
+        ...(rec.loteId !== undefined ? { loteId: rec.loteId } : {}),
+        ...(rec.procedureCategory !== undefined ? { procedureCategory: rec.procedureCategory } : {}),
+        ...(rec.tramiteId !== undefined ? { tramiteId: rec.tramiteId } : {}),
+        ...(rec.userId !== undefined ? { userId: rec.userId } : {}),
       };
       if (existing) {
         await ctx.db.patch(existing._id, doc);
@@ -509,8 +540,198 @@ export const upsertDatamappingBatch = mutation({
   },
 });
 
+const patchDatamappingEnrichmentUpdateValidator = v.object({
+  id: v.id("datamappingRecords"),
+  rfc: v.string(),
+  placa: v.optional(v.string()),
+  evoId: v.optional(v.string()),
+  codiId: v.optional(v.string()),
+  expirationDate: v.optional(v.string()),
+  folioNumber: v.optional(v.string()),
+  loteId: v.optional(v.string()),
+  procedureCategory: v.optional(v.string()),
+  tramiteId: v.optional(v.string()),
+  userId: v.optional(v.string()),
+});
+
+/**
+ * Actualiza rfc, enrichmentExtracted y campos opcionales de enriquecimiento en datamappingRecords.
+ * Siempre marca enrichmentExtracted: true (registro ya enriquecido; no se reprocesa salvo rerun).
+ * Si rfc es vacío, guarda "" (registro procesado; RFC no estaba en el JSON para ese tipo de movimiento).
+ */
+export const patchDatamappingRfcBatch = mutation({
+  args: {
+    updates: v.array(patchDatamappingEnrichmentUpdateValidator),
+  },
+  handler: async (ctx, { updates }) => {
+    for (const u of updates) {
+      const trimmed = u.rfc.trim();
+      const patch: Record<string, unknown> = {
+        rfc: trimmed === "" ? "" : trimmed.toUpperCase(),
+        enrichmentExtracted: true,
+      };
+      const optionalKeys = [
+        "placa",
+        "evoId",
+        "codiId",
+        "expirationDate",
+        "folioNumber",
+        "loteId",
+        "procedureCategory",
+        "tramiteId",
+        "userId",
+      ] as const;
+      for (const k of optionalKeys) {
+        const v = u[k];
+        if (v !== undefined && v !== null) patch[k] = v;
+      }
+      await ctx.db.patch(u.id, patch);
+    }
+    return { patched: updates.length };
+  },
+});
+
+/** Backfill: marca enrichmentExtracted en lote (p. ej. false) y elimina rfcExtracted de cada doc. Ejecutar una vez tras añadir el campo. */
+export const backfillDatamappingEnrichmentExtractedBatch = mutation({
+  args: {
+    updates: v.array(v.object({
+      id: v.id("datamappingRecords"),
+      enrichmentExtracted: v.boolean(),
+    })),
+  },
+  handler: async (ctx, { updates }) => {
+    for (const { id, enrichmentExtracted } of updates) {
+      await ctx.db.patch(id, { enrichmentExtracted, rfcExtracted: undefined });
+    }
+    return { patched: updates.length };
+  },
+});
+
+const rfcEnrichmentContinueStateValidator = v.optional(
+  v.union(
+    v.object({
+      tipoMovIndex: v.number(),
+      cursor: v.union(v.string(), v.null()),
+      tipoMovOrder: v.array(v.string()),
+    }),
+    v.object({
+      cursor: v.union(v.string(), v.null()),
+      updatedAtFrom: v.string(),
+      updatedAtTo: v.string(),
+    })
+  )
+);
+
+/** Crea una ejecución de enriquecimiento RFC (status running). */
+export const createRfcEnrichmentRun = mutation({
+  args: {
+    fromDate: v.string(),
+    toDate: v.string(),
+  },
+  handler: async (ctx, { fromDate, toDate }) => {
+    const runId = await ctx.db.insert("rfcEnrichmentRuns", {
+      startedAt: Date.now(),
+      fromDate,
+      toDate,
+      status: "running",
+    });
+    return { runId };
+  },
+});
+
+/** Actualiza una ejecución de enriquecimiento al terminar (éxito, timeout o error). */
+export const updateRfcEnrichmentRun = mutation({
+  args: {
+    runId: v.id("rfcEnrichmentRuns"),
+    status: v.union(
+      v.literal("completed"),
+      v.literal("timed_out"),
+      v.literal("error")
+    ),
+    processed: v.optional(v.number()),
+    enriched: v.optional(v.number()),
+    message: v.optional(v.string()),
+    continueState: rfcEnrichmentContinueStateValidator,
+  },
+  handler: async (ctx, { runId, ...updates }) => {
+    await ctx.db.patch(runId, {
+      ...updates,
+      completedAt: Date.now(),
+    });
+  },
+});
+
+/** Guarda resultados de la investigación RFC en la tabla rfcInvestigationResults. */
+export const insertRfcInvestigationResults = mutation({
+  args: {
+    fromDate: v.string(),
+    toDate: v.string(),
+    matchCount: v.number(),
+    matches: v.array(
+      v.object({
+        rfc: v.string(),
+        referencia: v.string(),
+        monto: v.number(),
+        updatedAt: v.string(),
+        tipoMovimiento: v.optional(v.string()),
+        fuente: v.optional(v.string()),
+      })
+    ),
+  },
+  handler: async (ctx, { fromDate, toDate, matchCount, matches }) => {
+    await ctx.db.insert("rfcInvestigationResults", {
+      runAt: Date.now(),
+      fromDate,
+      toDate,
+      matchCount,
+      matches,
+    });
+    return { ok: true };
+  },
+});
+
+/** Key para marca de agua de extracción incremental datamapping. */
+const DATAMAPPING_WATERMARK_KEY = "datamapping_watermark";
+
+/** Actualiza la marca de agua de datamapping (updatedAt más reciente procesado). */
+export const setDatamappingWatermark = mutation({
+  args: { lastUpdatedAt: v.string() },
+  handler: async (ctx, { lastUpdatedAt }) => {
+    const existing = await ctx.db
+      .query("processingControl")
+      .withIndex("by_key", (q) => q.eq("key", DATAMAPPING_WATERMARK_KEY))
+      .first();
+    const doc = {
+      key: DATAMAPPING_WATERMARK_KEY,
+      lastCompleteDay: 0,
+      lastProcessedTimestamp: lastUpdatedAt,
+      year: 0,
+      month: 0,
+    };
+    if (existing) {
+      await ctx.db.patch(existing._id, doc);
+    } else {
+      await ctx.db.insert("processingControl", doc);
+    }
+    return { ok: true };
+  },
+});
+
+/** Borra la marca de agua de datamapping (tras clear table). */
+export const clearDatamappingWatermark = mutation({
+  args: {},
+  handler: async (ctx) => {
+    const doc = await ctx.db
+      .query("processingControl")
+      .withIndex("by_key", (q) => q.eq("key", DATAMAPPING_WATERMARK_KEY))
+      .first();
+    if (doc) await ctx.db.delete(doc._id);
+    return { ok: true };
+  },
+});
+
 /** Elimina un lote de datamappingRecords (para re-import). Llamar en loop hasta deleted=0. */
-const DATAMAPPING_BATCH = 500;
+const DATAMAPPING_BATCH = 2000; // 4000 superó 16MB; 2000 es un punto medio
 
 export const deleteDatamappingRecordsBatch = mutation({
   args: {},

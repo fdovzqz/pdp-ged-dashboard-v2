@@ -262,6 +262,9 @@ export default defineSchema({
 
   /** Registros de DynamoDB datamapping (backup Prod) para reconciliación Enero 2026. */
   datamappingRecords: defineTable({
+    /** Llave única en DynamoDB (id de transacción). Usado para upsert sin OCC. */
+    transactionId: v.string(),
+    /** Referencia de pago (puede repetirse en varios meses si se actualiza). */
     referencia: v.string(),
     monto: v.number(),
     fechaPago: v.optional(v.string()),
@@ -270,9 +273,29 @@ export default defineSchema({
     tipoMovimiento: v.optional(v.string()),
     updatedAt: v.string(),
     rawJson: v.string(),
+    /** RFC extraído de rawJson por ETL (para búsqueda rápida por RFC). */
+    rfc: v.optional(v.string()),
+    /** @deprecated El backfill "Preparar enrichmentExtracted" hace patch con rfcExtracted: undefined; tras ejecutarlo en toda la tabla se puede eliminar este campo del schema. */
+    rfcExtracted: v.optional(v.boolean()),
+    /** true = ya fue enriquecido (RFC + placa, evoId, etc.); false = pendiente. Evita reprocesar salvo rerun explícito. */
+    enrichmentExtracted: v.optional(v.boolean()),
+    /** Campos extraídos de rawJson por enriquecimiento (placa, evoId, etc.). */
+    placa: v.optional(v.string()),
+    evoId: v.optional(v.string()),
+    codiId: v.optional(v.string()),
+    expirationDate: v.optional(v.string()),
+    folioNumber: v.optional(v.string()),
+    loteId: v.optional(v.string()),
+    procedureCategory: v.optional(v.string()),
+    tramiteId: v.optional(v.string()),
+    userId: v.optional(v.string()),
   })
+    .index("by_transactionId", ["transactionId"])
     .index("by_referencia", ["referencia"])
-    .index("by_updatedAt", ["updatedAt"]),
+    .index("by_updatedAt", ["updatedAt"])
+    .index("by_rfc", ["rfc"])
+    .index("by_tipoMovimiento_updatedAt", ["tipoMovimiento", "updatedAt"])
+    .index("by_enrichmentExtracted_updatedAt", ["enrichmentExtracted", "updatedAt"]),
 
   /** Control de procesamiento ETL. */
   processingControl: defineTable({
@@ -295,6 +318,87 @@ export default defineSchema({
     monthMismatchCount: v.optional(v.number()),
     totalUnique: v.number(),
   }).index("by_month", ["month"]),
+
+  /** Historial de ejecuciones de enriquecimiento RFC (persiste al refrescar la UI). */
+  rfcEnrichmentRuns: defineTable({
+    startedAt: v.number(),
+    fromDate: v.string(),
+    toDate: v.string(),
+    status: v.union(
+      v.literal("running"),
+      v.literal("completed"),
+      v.literal("timed_out"),
+      v.literal("error")
+    ),
+    processed: v.optional(v.number()),
+    enriched: v.optional(v.number()),
+    message: v.optional(v.string()),
+    continueState: v.optional(
+      v.union(
+        v.object({
+          tipoMovIndex: v.number(),
+          cursor: v.union(v.string(), v.null()),
+          tipoMovOrder: v.array(v.string()),
+        }),
+        v.object({
+          cursor: v.union(v.string(), v.null()),
+          updatedAtFrom: v.string(),
+          updatedAtTo: v.string(),
+        })
+      )
+    ),
+    completedAt: v.optional(v.number()),
+  }).index("by_startedAt", ["startedAt"]),
+
+  /** Resultados guardados de la investigación RFC → referencias (rango: enero a fecha). */
+  rfcInvestigationResults: defineTable({
+    runAt: v.number(),
+    fromDate: v.string(),
+    toDate: v.string(),
+    matchCount: v.number(),
+    matches: v.array(
+      v.object({
+        rfc: v.string(),
+        referencia: v.string(),
+        monto: v.number(),
+        updatedAt: v.string(),
+        tipoMovimiento: v.optional(v.string()),
+        fuente: v.optional(v.string()),
+      })
+    ),
+  }).index("by_runAt", ["runAt"]),
+
+  /** Jobs de pipeline: estado, progreso, resultado; para extracciones async, progreso visible tras refresh. */
+  pipelineJobs: defineTable({
+    jobType: v.string(),
+    scope: v.any(),
+    status: v.union(
+      v.literal("pending"),
+      v.literal("running"),
+      v.literal("completed"),
+      v.literal("failed"),
+      v.literal("cancelled")
+    ),
+    progress: v.optional(
+      v.object({
+        current: v.number(),
+        total: v.optional(v.number()),
+        unit: v.optional(v.string()),
+        message: v.optional(v.string()),
+      })
+    ),
+    result: v.optional(v.any()),
+    errorMessage: v.optional(v.string()),
+    startedAt: v.number(),
+    completedAt: v.optional(v.number()),
+    dependsOnJobIds: v.optional(v.array(v.id("pipelineJobs"))),
+    parentJobId: v.optional(v.id("pipelineJobs")),
+    externalId: v.optional(v.string()),
+    retryCount: v.optional(v.number()),
+  })
+    .index("by_startedAt", ["startedAt"])
+    .index("by_status", ["status"])
+    .index("by_jobType", ["jobType"]),
 
   /** Errores/diferencias de reconciliación; se borran al re-ejecutar. kind: onlyCw | onlyDdb | mismatch | monthMismatch */
   reconciliationErrors: defineTable({

@@ -131,10 +131,25 @@ Scripts en `scripts/` para operaciones CLI:
 
 Los scripts `fetch-*` son herramientas de análisis ad-hoc y requieren el dashboard ejecutándose en localhost.
 
+## Cargas masivas (Inngest)
+
+Las cargas masivas (p. ej. histórico completo de datamapping, ~900k registros) se orquestan con **Inngest** siguiendo un patrón estándar:
+
+- **Un step por unidad** (p. ej. un mes): si falla una unidad, solo esa se reintenta.
+- **Ejecución en paralelo** (p. ej. 26 meses a la vez).
+- **Chunks** dentro de cada step para evitar timeouts (524/600s).
+- **Resultado explícito**: `completedMonths` (ok) y `failedMonths` (fallaron tras reintentos) para saber en qué enfocarse.
+
+El mismo patrón se aplica a enriquecimientos, agregaciones y reconciliaciones. Ver [docs/mass-loads-inngest-pattern.md](docs/mass-loads-inngest-pattern.md).
+
 ## Documentación Adicional
 
+- [docs/mass-loads-inngest-pattern.md](docs/mass-loads-inngest-pattern.md) – **Patrón de cargas masivas con Inngest** (steps por unidad, paralelo, reintentos, resultado completed/failed)
+- [docs/datamapping-full-history-runbook.md](docs/datamapping-full-history-runbook.md) – Runbook: histórico completo datamapping
 - [extraction-process.md](extraction-process.md) – Proceso de extracción desde CloudWatch (queries, parsing, deduplicación)
 - [cloudwatch-queries.md](cloudwatch-queries.md) – Queries CloudWatch para V1, V2 y PaymentProcess
 - [reconciliation-dynamodb.md](reconciliation-dynamodb.md) – Reconciliación CloudWatch vs DynamoDB (datamapping)
 - [datamapping-aggregations.md](datamapping-aggregations.md) – Análisis Mensual y Anual desde DataMapping (tablas agregadas)
+- [docs/jobs-page.md](docs/jobs-page.md) – Página Jobs: centralización de pipelines (sync CloudWatch, carga DynamoDB, agregados, enriquecimiento RFC, backfill)
+- [docs/inngest-setup.md](docs/inngest-setup.md) – Configuración básica de Inngest
 - [convex/README.md](convex/README.md) – Funciones Convex del proyecto

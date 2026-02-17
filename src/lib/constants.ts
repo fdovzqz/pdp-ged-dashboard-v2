@@ -25,6 +25,9 @@ export const PERIOD_END = "2026-02";
 /** Fecha inicial del período (formato YYYY-MM-DD). */
 export const PERIOD_START_DATE = "2024-01-01";
 
+/** Inicio de datamapping: portal de pago Durango entró en operación. */
+export const DATAMAPPING_HISTORY_START = "2024-01-01";
+
 /** Fecha final del período (último día de feb 2026). */
 export const PERIOD_END_DATE = "2026-02-28";
 

@@ -1,0 +1,334 @@
+"use client";
+
+import { useCallback, useState } from "react";
+import Link from "next/link";
+import { useQuery, useAction } from "convex/react";
+import { api } from "convex/_generated/api";
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
+import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import { Download, FileText, Loader2, Search } from "lucide-react";
+import { timestampToMexicoDate } from "@/lib/mexicoDateRange";
+
+/** RFCs a investigar: contribuyentes que pagaron algún tipo de declaración. */
+const RFC_LIST = [
+  "BBA030609AM8",
+  "AAAA801014M1A",
+  "AAFM820208534",
+  "AAFY000305MJ6",
+  "AID740730RM1",
+  "BMI221107TR9",
+  "BTR2209265B4",
+  "CAAL751230LW7",
+  "CEC9904146T2",
+  "CHH1501093I4",
+  "CME1308283F8",
+  "CMM0312165F6",
+  "CNA010605Q50",
+  "CNA890116SF2",
+  "CPH0802297G9",
+  "CPI240125QB7",
+  "CPM110719SG3",
+  "DCE131011HH2",
+  "DIN030224KU5",
+  "GARF60128FJ8",
+  "GARF8405011M8",
+  "GOPJ021014AM9",
+  "GORR8807287L7",
+  "GPS210621M14",
+  "GSP9607102L9",
+  "HELE7211031R1",
+  "HESE950105IE1",
+  "HRD101209QS5",
+  "HVE000523D32",
+  "IEL020207E82",
+  "ILI810511RQA",
+  "IMA010201144",
+  "INE140404NI0",
+  "IVE820430M47",
+  "JAND7112295U5",
+  "JOP810218E71",
+  "MMU970204DG7",
+  "MOY970124CF1",
+  "MRO960820JC2",
+  "MSC080711EA3",
+  "NME180725BE8",
+  "NUDC671202RE5",
+  "PAD040811566",
+  "PCE140530632",
+  "PED781129JT6",
+  "PIN941105IQA",
+  "QUMC600326J57",
+  "REC050818C37",
+  "ROGH610509HZ4",
+  "RORR4010193M8",
+  "SAMX7509083L1",
+  "SIB8606304P3",
+  "SPM860820CF5",
+  "STP401231P53",
+  "TAN190524SQ4",
+  "TCH850701RM1",
+  "VAOL780925HY0",
+  "VATG560409LU5",
+];
+
+type Match = {
+  rfc: string;
+  referencia: string;
+  monto: number;
+  updatedAt: string;
+  tipoMovimiento?: string;
+  fuente?: string;
+};
+
+function escapeCsv(s: string): string {
+  if (/[",\n\r]/.test(s)) return `"${s.replace(/"/g, '""')}"`;
+  return s;
+}
+
+function buildCsv(matches: Match[]): string {
+  const header = "RFC,referencia,monto,fechaPago,tipoMovimiento,fuente\n";
+  const body = matches
+    .map((m) =>
+      [
+        escapeCsv(m.rfc),
+        escapeCsv(m.referencia),
+        m.monto,
+        escapeCsv(timestampToMexicoDate(m.updatedAt) || m.updatedAt),
+        escapeCsv(m.tipoMovimiento ?? ""),
+        escapeCsv(m.fuente ?? ""),
+      ].join(",")
+    )
+    .join("\n");
+  return "\uFEFF" + header + body;
+}
+
+function formatRunAt(ts: number): string {
+  const d = new Date(ts);
+  return d.toLocaleString("es-MX", {
+    dateStyle: "short",
+    timeStyle: "short",
+  });
+}
+
+export default function RfcReferenciasPage(): React.ReactElement {
+  const savedResults = useQuery(api.queries.getLatestRfcInvestigationResults);
+  const runAction = useAction(api.actions.runRfcInvestigationAndSave);
+  const [running, setRunning] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const matches = savedResults?.matches ?? [];
+
+  const handleSearchAndSave = useCallback(async () => {
+    setRunning(true);
+    setError(null);
+    try {
+      await runAction({ rfcs: RFC_LIST });
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Error al buscar");
+    } finally {
+      setRunning(false);
+    }
+  }, [runAction]);
+
+  const downloadCsv = useCallback(() => {
+    if (matches.length === 0) return;
+    const csv = buildCsv(matches);
+    const blob = new Blob([csv], { type: "text/csv;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "rfc-referencias-pagos-enero-a-fecha.csv";
+    a.click();
+    URL.revokeObjectURL(url);
+  }, [matches]);
+
+  const rfcWithMatches = new Set(matches.map((m) => m.rfc));
+  const rfcWithoutMatches = RFC_LIST.filter((r) => !rfcWithMatches.has(r));
+  const isLoading = savedResults === undefined;
+
+  return (
+    <div className="min-h-screen bg-background p-6">
+      <div className="max-w-6xl mx-auto space-y-6">
+        {/* Header */}
+        <div className="flex flex-wrap items-center justify-between gap-4">
+          <div>
+            <h1 className="text-2xl font-semibold tracking-tight flex items-center gap-2">
+              <FileText className="size-6" />
+              Investigación RFC → Referencias de Pago
+            </h1>
+            <p className="text-sm text-muted-foreground mt-1">
+              Rango: 1 de enero a la fecha. Los resultados se guardan en la tabla{" "}
+              <code className="text-xs bg-muted px-1 rounded">rfcInvestigationResults</code>.
+              Requiere enriquecimiento previo en{" "}
+              <Link href="/upload" className="text-emerald-400 hover:text-emerald-300 underline">
+                Datos
+              </Link>
+              .
+            </p>
+          </div>
+          <div className="flex items-center gap-2">
+            <Button
+              variant="default"
+              size="sm"
+              className="gap-2"
+              onClick={handleSearchAndSave}
+              disabled={running || isLoading}
+            >
+              {running ? (
+                <Loader2 className="size-4 animate-spin" />
+              ) : (
+                <Search className="size-4" />
+              )}
+              Buscar y guardar
+            </Button>
+            {matches.length > 0 && (
+              <Button
+                variant="outline"
+                size="sm"
+                className="gap-2"
+                onClick={downloadCsv}
+              >
+                <Download className="size-4" />
+                Exportar CSV
+              </Button>
+            )}
+          </div>
+        </div>
+
+        {/* Info */}
+        <Card className="border-slate-700/50 bg-slate-900/30">
+          <CardHeader>
+            <CardTitle className="text-base">Lista de RFC</CardTitle>
+            <CardDescription>
+              {RFC_LIST.length} RFC que pagaron algún tipo de declaración. Rango de búsqueda: desde 1 de enero 2026 hasta la fecha actual.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <div className="flex flex-wrap gap-2">
+              {RFC_LIST.slice(0, 12).map((rfc) => (
+                <Badge key={rfc} variant="secondary" className="font-mono text-xs">
+                  {rfc}
+                </Badge>
+              ))}
+              {RFC_LIST.length > 12 && (
+                <Badge variant="outline" className="text-muted-foreground">
+                  +{RFC_LIST.length - 12} más
+                </Badge>
+              )}
+            </div>
+          </CardContent>
+        </Card>
+
+        {error && (
+          <div className="rounded-lg border border-red-500/50 bg-red-500/10 px-4 py-3 text-sm text-red-300">
+            {error}
+          </div>
+        )}
+
+        {/* Results table */}
+        {isLoading && (
+          <div className="rounded-lg border border-slate-700/50 bg-slate-900/30 p-8 text-center text-muted-foreground">
+            Cargando...
+          </div>
+        )}
+
+        {!isLoading && savedResults && (
+          <Card className="border-slate-700/50 bg-slate-900/30">
+            <CardHeader>
+              <CardTitle className="text-base">Resultados guardados</CardTitle>
+              <CardDescription>
+                {matches.length} referencias encontradas para {rfcWithMatches.size} RFC.
+                Rango: {savedResults.fromDate} a {savedResults.toDate}.
+                Ejecutado: {formatRunAt(savedResults.runAt)}.
+                {rfcWithoutMatches.length > 0 && (
+                  <span className="block mt-1 text-amber-400/90">
+                    {rfcWithoutMatches.length} RFC sin coincidencias.
+                  </span>
+                )}
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              {matches.length > 0 ? (
+                <div className="overflow-x-auto">
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>RFC</TableHead>
+                        <TableHead>Referencia</TableHead>
+                        <TableHead className="text-right">Monto</TableHead>
+                        <TableHead>Fecha pago</TableHead>
+                        <TableHead>Tipo movimiento</TableHead>
+                        <TableHead>Fuente</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {matches.map((m, i) => (
+                        <TableRow key={`${m.rfc}-${m.referencia}-${i}`}>
+                          <TableCell className="font-mono text-sm">{m.rfc}</TableCell>
+                          <TableCell className="font-mono text-sm">{m.referencia}</TableCell>
+                          <TableCell className="text-right tabular-nums">
+                            ${m.monto.toLocaleString("es-MX")}
+                          </TableCell>
+                          <TableCell className="text-sm">
+                            {timestampToMexicoDate(m.updatedAt) || m.updatedAt.slice(0, 10)}
+                          </TableCell>
+                          <TableCell className="text-sm">{m.tipoMovimiento ?? "—"}</TableCell>
+                          <TableCell>
+                            <Badge variant="outline" className="text-xs">
+                              {m.fuente ?? "—"}
+                            </Badge>
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </div>
+              ) : (
+                <p className="text-muted-foreground">
+                  No hay resultados guardados. Pulsa <strong>Buscar y guardar</strong> para ejecutar
+                  la investigación (rango: 1 enero a hoy) y guardar en la tabla.
+                </p>
+              )}
+            </CardContent>
+          </Card>
+        )}
+
+        {!isLoading && !savedResults && (
+          <Card className="border-slate-700/50 bg-slate-900/30 border-dashed">
+            <CardContent className="py-12 text-center text-muted-foreground">
+              <p className="mb-2">
+                No hay resultados guardados. Pulsa <strong>Buscar y guardar</strong> para ejecutar
+                la investigación y guardar los resultados en la tabla.
+              </p>
+              <Button
+                variant="outline"
+                size="sm"
+                className="mt-2 gap-2"
+                onClick={handleSearchAndSave}
+                disabled={running}
+              >
+                {running ? <Loader2 className="size-4 animate-spin" /> : <Search className="size-4" />}
+                Buscar y guardar
+              </Button>
+            </CardContent>
+          </Card>
+        )}
+      </div>
+    </div>
+  );
+}

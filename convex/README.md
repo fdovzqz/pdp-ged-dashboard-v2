@@ -28,6 +28,27 @@ Cada entrada de día incluye conteos y montos por fuente:
 
 Usados por `getPaymentChannelStats` para desglose EVO vs Ventanilla por día.
 
+## Schema: pipelineJobs
+
+Jobs de pipeline con estado persistido. Ver [docs/jobs-page.md](../docs/jobs-page.md).
+
+| Campo | Tipo | Descripción |
+|-------|------|-------------|
+| jobType | string | Tipo de job |
+| scope | any | Alcance (fechas, meses, etc.) |
+| status | enum | pending \| running \| completed \| failed \| cancelled |
+| progress | object? | current, total?, unit?, message? |
+| result, errorMessage | any? | Resultado o error |
+| startedAt, completedAt | number | Timestamps |
+| dependsOnJobIds, parentJobId | id[]? | Dependencias |
+| externalId, retryCount | string? \| number? | Integración externa |
+
+**pipelineJobs.ts**: createPipelineJob, updatePipelineJobProgress, updatePipelineJobResult, updatePipelineJobError, updatePipelineJobRetry, listPipelineJobs, getPipelineJob.
+
+Las cargas masivas (histórico datamapping, enriquecimientos, agregaciones) orquestadas por Inngest guardan en `result` listas `completedMonths` / `failedMonths` (o equivalentes) para saber qué unidades terminaron bien y cuáles fallaron. Ver [docs/mass-loads-inngest-pattern.md](../docs/mass-loads-inngest-pattern.md).
+
+---
+
 ## Funciones
 
 ### Actions
@@ -51,6 +72,12 @@ Para visualizar Análisis Mensual y Anual con datos exclusivamente de DynamoDB (
 - **getDatamappingRecordsByMonthPaginated** – Paginada por mes para el ETL.
 
 Ver [datamapping-aggregations.md](../datamapping-aggregations.md) para detalles.
+
+### Enriquecimiento RFC (datamappingRecords)
+
+Extracción del RFC y campos de enriquecimiento desde `rawJson`; solo registros con `enrichmentExtracted: false`. Incluye preflight (conteo opcional), reanudación por timeout y backfill único de `enrichmentExtracted`.
+
+Ver [rfc-enrichment-datamapping.md](../rfc-enrichment-datamapping.md) para el proceso completo.
 
 ### Queries
 
