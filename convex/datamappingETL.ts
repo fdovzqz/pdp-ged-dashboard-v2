@@ -17,6 +17,7 @@ type DatamappingRec = {
   referencia: string;
   monto: number;
   updatedAt: string;
+  fechaTransaccion?: string;
   tipoMovimiento?: string;
   fuente?: string;
 };
@@ -80,6 +81,7 @@ export const buildDatamappingAggregates = action({
           {
             month: monthStr,
             paginationOpts: { numItems: PAGE_SIZE, cursor },
+            useFechaTransaccion: true,
           }
         )) as {
           page: DatamappingRec[];
@@ -125,7 +127,8 @@ export const buildDatamappingAggregates = action({
       const dailyFuenteMap = new Map<string, Map<string, { count: number; monto: number }>>();
 
       for (const r of records) {
-        const parts = datamappingUpdatedAtToParts(r.updatedAt || "");
+        const dateStr = r.fechaTransaccion ?? r.updatedAt ?? "";
+        const parts = datamappingUpdatedAtToParts(dateStr);
         if (!parts || parts.month !== month || parts.year !== year) continue;
 
         const key = `${parts.year}-${parts.month}-${parts.day}-${parts.hour}`;

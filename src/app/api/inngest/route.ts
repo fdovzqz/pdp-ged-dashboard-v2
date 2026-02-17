@@ -7,6 +7,8 @@ import { datamappingBackfillEnrichmentByMonths } from "@/inngest/datamapping-bac
 import { datamappingClear } from "@/inngest/datamapping-clear";
 import { datamappingIncremental } from "@/inngest/datamapping-incremental";
 import { datamappingLoadFromDate } from "@/inngest/datamapping-load-from-date";
+import { datamappingFechaTransaccionFull } from "@/inngest/datamapping-fecha-transaccion-full";
+import { datamappingFechaTransaccionFromDate } from "@/inngest/datamapping-fecha-transaccion-from-date";
 import { pipelineJobCancelledHandler } from "@/inngest/pipeline-job-cancelled-handler";
 
 /**
@@ -24,6 +26,8 @@ export const { GET, POST, PUT } = serve({
     datamappingClear,
     datamappingIncremental,
     datamappingLoadFromDate,
+    datamappingFechaTransaccionFull,
+    datamappingFechaTransaccionFromDate,
     pipelineJobCancelledHandler,
   ],
 });

@@ -54,7 +54,7 @@ export function DashboardContent(): React.ReactElement {
   const [showYearComparison, setShowYearComparison] = useState(false);
 
   const dataSource: DataSource =
-    searchParams.get("source") === "datamapping" ? "datamapping" : "cloudwatch";
+    searchParams.get("source") === "cloudwatch" ? "cloudwatch" : "datamapping";
   const monthKeyFromUrl = searchParams.get("month") ?? ANALYSIS_MONTH_STRING;
   const { year: selectedYear, month: selectedMonth } = parseMonthKey(monthKeyFromUrl);
 

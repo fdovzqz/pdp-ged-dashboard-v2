@@ -289,13 +289,19 @@ export default defineSchema({
     procedureCategory: v.optional(v.string()),
     tramiteId: v.optional(v.string()),
     userId: v.optional(v.string()),
+    /** Estado del pago en DynamoDB (ej. PAGO VALIDADO). Extraído en carga; usado para filtrar tableros mensual/anual solo por pagos validados. */
+    status: v.optional(v.string()),
+    /** Fecha de transacción desde paymentRecords (por referencia); fallback a updatedAt si no existe en CloudWatch. Usada para agregaciones y tableros. */
+    fechaTransaccion: v.optional(v.string()),
   })
     .index("by_transactionId", ["transactionId"])
     .index("by_referencia", ["referencia"])
     .index("by_updatedAt", ["updatedAt"])
     .index("by_rfc", ["rfc"])
     .index("by_tipoMovimiento_updatedAt", ["tipoMovimiento", "updatedAt"])
-    .index("by_enrichmentExtracted_updatedAt", ["enrichmentExtracted", "updatedAt"]),
+    .index("by_enrichmentExtracted_updatedAt", ["enrichmentExtracted", "updatedAt"])
+    .index("by_status_updatedAt", ["status", "updatedAt"])
+    .index("by_status_fechaTransaccion", ["status", "fechaTransaccion"]),
 
   /** Control de procesamiento ETL. */
   processingControl: defineTable({
@@ -364,6 +370,14 @@ export default defineSchema({
         updatedAt: v.string(),
         tipoMovimiento: v.optional(v.string()),
         fuente: v.optional(v.string()),
+        status: v.optional(v.string()),
+        loteId: v.optional(v.string()),
+        tramiteId: v.optional(v.string()),
+        reciboPagoUrl: v.optional(v.string()),
+        /** @deprecated Nombre antiguo; documentos guardados antes del cambio pueden tenerlo. La UI usa reciboPagoUrl con fallback a este. */
+        referenciaPagoUrl: v.optional(v.string()),
+        endMonth: v.optional(v.string()),
+        declarationType: v.optional(v.string()),
       })
     ),
   }).index("by_runAt", ["runAt"]),

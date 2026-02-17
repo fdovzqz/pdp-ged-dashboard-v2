@@ -57,7 +57,7 @@ En la misma sección, subsección "Agregaciones DataMapping":
 
 - Seleccionar los meses a procesar (p. ej. 2024-01, 2025-01, 2026-01).
 - Clic en "Generar tablas agregadas (DataMapping)".
-- La action `buildDatamappingAggregates` lee `datamappingRecords`, agrupa por día/hora exacta de `updatedAt` y escribe en las tablas `*Datamapping`.
+- La action `buildDatamappingAggregates` lee `datamappingRecords` **solo con `status = "PAGO VALIDADO"`** (índice `by_status_updatedAt`), agrupa por día/hora exacta de `updatedAt` y escribe en las tablas `*Datamapping`. Los registros sin `status` (carga antigua) no entran en los tableros hasta que se re-carguen o se haga backfill de `status`.
 
 ### 3. Ver los dashboards con fuente DataMapping
 

@@ -330,7 +330,7 @@ const DATAMAPPING_INGEST_BATCH = 150;
 const MAX_ITEMS_PER_ACTION = 4000;
 
 type BaseDatamappingRec = ReturnType<typeof mapDynamoItemToRecord>;
-/** Añade enriquecimiento (RFC, placa, etc.) desde rawJson y marca enrichmentExtracted: true para la carga. */
+/** Añade enriquecimiento (RFC, placa, status, fuente, etc.) desde rawJson y marca enrichmentExtracted: true para la carga. */
 function withEnrichment(rec: BaseDatamappingRec): BaseDatamappingRec & {
   rfc: string;
   placa?: string;
@@ -342,6 +342,8 @@ function withEnrichment(rec: BaseDatamappingRec): BaseDatamappingRec & {
   procedureCategory?: string;
   tramiteId?: string;
   userId?: string;
+  status?: string;
+  fuente?: string;
   enrichmentExtracted: true;
 } {
   const fields = extractEnrichmentFieldsFromRawJson(rec.rawJson);
@@ -356,6 +358,8 @@ function withEnrichment(rec: BaseDatamappingRec): BaseDatamappingRec & {
     procedureCategory?: string;
     tramiteId?: string;
     userId?: string;
+    status?: string;
+    fuente?: string;
     enrichmentExtracted: true;
   } = {
     ...rec,
@@ -371,6 +375,10 @@ function withEnrichment(rec: BaseDatamappingRec): BaseDatamappingRec & {
   if (fields.procedureCategory) out.procedureCategory = fields.procedureCategory;
   if (fields.tramiteId) out.tramiteId = fields.tramiteId;
   if (fields.userId) out.userId = fields.userId;
+  if (fields.status !== undefined && fields.status !== "") out.status = fields.status;
+  else if (rec.status) out.status = rec.status;
+  if (fields.fuente !== undefined && fields.fuente !== "") out.fuente = fields.fuente;
+  else if (rec.fuente) out.fuente = rec.fuente;
   return out;
 }
 
@@ -870,6 +878,8 @@ export const enrichDatamappingWithRfc = action({
             "procedureCategory",
             "tramiteId",
             "userId",
+            "status",
+            "fuente",
           ] as const;
           for (const k of optionalKeys) {
             const v = fields[k];
@@ -1044,6 +1054,202 @@ export const backfillDatamappingEnrichmentExtractedForRange = action({
   },
 });
 
+/** Límite de tiempo para backfill fechaTransaccion por rango (cada step de Inngest). */
+const FECHA_TRANSACCION_BACKFILL_MAX_MS = 85_000;
+
+/** Fin de rango universo datamapping para consultas. */
+const DATAMAPPING_UNIVERSE_END = "2031-01-01T00:00:00.000Z";
+
+/**
+ * Backfill fechaTransaccion por mes: procesa registros con updatedAt en el rango del mes.
+ * Lookup en paymentRecords por referencia (prioriza monto coincidente); fallback a updatedAt.
+ * Para Inngest: un step por mes en paralelo; bucle con continueState hasta isDone.
+ */
+export const backfillFechaTransaccionForMonth = action({
+  args: {
+    year: v.number(),
+    month: v.number(),
+    continueState: v.optional(
+      v.object({
+        cursor: v.union(v.string(), v.null()),
+      })
+    ),
+    maxDurationMs: v.optional(v.number()),
+  },
+  handler: async (ctx, { year, month, continueState, maxDurationMs: maxMs }) => {
+    const startMs = Date.now();
+    const limitMs = maxMs ?? FECHA_TRANSACCION_BACKFILL_MAX_MS;
+    const ym = `${year}-${String(month).padStart(2, "0")}`;
+    const updatedAtFrom = `${ym}-01`;
+    const nextMonth = month === 12 ? 1 : month + 1;
+    const nextYear = month === 12 ? year + 1 : year;
+    const updatedAtTo = `${nextYear}-${String(nextMonth).padStart(2, "0")}-01`;
+
+    type Id = import("./_generated/dataModel").Id<"datamappingRecords">;
+    let cursor: string | null = continueState?.cursor ?? null;
+    let processed = 0;
+    let updated = 0;
+
+    try {
+      do {
+        if (Date.now() - startMs > limitMs) {
+          return {
+            processed,
+            updated,
+            isDone: false,
+            continueState: { cursor },
+            timedOut: true,
+          };
+        }
+
+        let result: {
+          page: Array<{ _id: Id; referencia: string; monto: number; updatedAt: string }>;
+          isDone: boolean;
+          continueCursor: string | null;
+        };
+        try {
+          result = (await ctx.runQuery(
+            api.queries.getDatamappingPageForFechaTransaccionBackfill,
+            { updatedAtFrom, updatedAtTo, cursor, numItems: 200 }
+          )) as typeof result;
+        } catch (e) {
+          throw sanitizeConvexResponseError(e);
+        }
+
+        if (result.page.length === 0) {
+          cursor = result.continueCursor;
+          if (result.isDone) break;
+          continue;
+        }
+
+        const lookup = (await ctx.runQuery(
+          api.queries.getFechaTransaccionForReferencias,
+          { referencias: result.page.map((r) => ({ referencia: r.referencia, monto: r.monto })) }
+        )) as Record<string, string>;
+
+        const updates: Array<{ id: Id; fechaTransaccion: string }> = [];
+        for (const r of result.page) {
+          processed += 1;
+          const fechaTransaccion = lookup[r.referencia] ?? r.updatedAt;
+          updates.push({ id: r._id, fechaTransaccion });
+        }
+
+        if (updates.length > 0) {
+          await ctx.runMutation(api.mutations.patchDatamappingFechaTransaccionBatch, {
+            updates,
+          });
+          updated += updates.length;
+        }
+
+        cursor = result.continueCursor;
+      } while (cursor);
+
+      return {
+        processed,
+        updated,
+        isDone: true,
+        continueState: undefined,
+      };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      throw new Error(`Backfill fechaTransaccion (mes ${ym}): ${message}`);
+    }
+  },
+});
+
+/**
+ * Backfill fechaTransaccion desde una fecha: procesa registros con updatedAt >= sinceDate.
+ * Lookup en paymentRecords por referencia (prioriza monto coincidente); fallback a updatedAt.
+ * Para Inngest load-from-date: bucle con continueState hasta isDone.
+ */
+export const backfillFechaTransaccionForDatamapping = action({
+  args: {
+    sinceDate: v.string(),
+    continueState: v.optional(
+      v.object({
+        cursor: v.union(v.string(), v.null()),
+      })
+    ),
+    maxDurationMs: v.optional(v.number()),
+  },
+  handler: async (ctx, { sinceDate, continueState, maxDurationMs: maxMs }) => {
+    const startMs = Date.now();
+    const limitMs = maxMs ?? FECHA_TRANSACCION_BACKFILL_MAX_MS;
+    const updatedAtFrom = sinceDate.includes("T") ? sinceDate : `${sinceDate}T00:00:00.000Z`;
+    const updatedAtTo = DATAMAPPING_UNIVERSE_END;
+
+    type Id = import("./_generated/dataModel").Id<"datamappingRecords">;
+    let cursor: string | null = continueState?.cursor ?? null;
+    let processed = 0;
+    let updated = 0;
+
+    try {
+      do {
+        if (Date.now() - startMs > limitMs) {
+          return {
+            processed,
+            updated,
+            isDone: false,
+            continueState: { cursor },
+            timedOut: true,
+          };
+        }
+
+        let result: {
+          page: Array<{ _id: Id; referencia: string; monto: number; updatedAt: string }>;
+          isDone: boolean;
+          continueCursor: string | null;
+        };
+        try {
+          result = (await ctx.runQuery(
+            api.queries.getDatamappingPageForFechaTransaccionBackfill,
+            { updatedAtFrom, updatedAtTo, cursor, numItems: 200 }
+          )) as typeof result;
+        } catch (e) {
+          throw sanitizeConvexResponseError(e);
+        }
+
+        if (result.page.length === 0) {
+          cursor = result.continueCursor;
+          if (result.isDone) break;
+          continue;
+        }
+
+        const lookup = (await ctx.runQuery(
+          api.queries.getFechaTransaccionForReferencias,
+          { referencias: result.page.map((r) => ({ referencia: r.referencia, monto: r.monto })) }
+        )) as Record<string, string>;
+
+        const updates: Array<{ id: Id; fechaTransaccion: string }> = [];
+        for (const r of result.page) {
+          processed += 1;
+          const fechaTransaccion = lookup[r.referencia] ?? r.updatedAt;
+          updates.push({ id: r._id, fechaTransaccion });
+        }
+
+        if (updates.length > 0) {
+          await ctx.runMutation(api.mutations.patchDatamappingFechaTransaccionBatch, {
+            updates,
+          });
+          updated += updates.length;
+        }
+
+        cursor = result.continueCursor;
+      } while (cursor);
+
+      return {
+        processed,
+        updated,
+        isDone: true,
+        continueState: undefined,
+      };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      throw new Error(`Backfill fechaTransaccion (desde ${sinceDate}): ${message}`);
+    }
+  },
+});
+
 /**
  * Ejecuta la investigación RFC (rango: 1 enero a hoy), guarda resultados en rfcInvestigationResults.
  */
@@ -1067,6 +1273,12 @@ export const runRfcInvestigationAndSave = action({
       updatedAt: string;
       tipoMovimiento?: string;
       fuente?: string;
+      status?: string;
+      loteId?: string;
+      tramiteId?: string;
+      reciboPagoUrl?: string;
+      endMonth?: string;
+      declarationType?: string;
     }>;
 
     await ctx.runMutation(api.mutations.insertRfcInvestigationResults, {

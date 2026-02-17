@@ -6,6 +6,7 @@ import {
   normalizeWithConfig,
 } from "./movementCodes";
 import { timestampToMexicoMonth } from "./lib/mexicoDate";
+import { extractStatusAndFuenteFromRawJson } from "./lib/dynamodb";
 
 /** Límite Convex: 8192 items por retorno. Clamp para paginación reactiva. */
 const MAX_PAGE_ITEMS = 1000;
@@ -498,9 +499,16 @@ export const findDuplicateReferenciasInMonth = query({
 /** Límite por tabla para no exceder 8192 items en el resultado. */
 const RECONCILIATION_TAKE = 8000;
 
+/** Valor de status que se considera pago validado en DataMapping. Usado en reconciliación y agregaciones. */
+const PAGO_VALIDADO_STATUS = "PAGO VALIDADO";
+
+/** Rango amplio para consultas datamapping sin filtro de fecha. */
+const DATAMAPPING_UNIVERSE_START = "2000-01-01T00:00:00.000Z";
+const DATAMAPPING_UNIVERSE_END = "2031-01-01T00:00:00.000Z";
+
 /**
  * Reconciliación CloudWatch (paymentRecords) vs DynamoDB (datamappingRecords) por referencia.
- * Solo considera paymentRecords del mes dado y todos los datamappingRecords ingeridos.
+ * Solo considera paymentRecords del mes dado y datamappingRecords con status = PAGO VALIDADO.
  */
 export const getReconciliationReport = query({
   args: { month: v.string() },
@@ -510,7 +518,15 @@ export const getReconciliationReport = query({
         .query("paymentRecords")
         .withIndex("by_month", (q) => q.eq("importMonth", month))
         .take(RECONCILIATION_TAKE),
-      ctx.db.query("datamappingRecords").take(RECONCILIATION_TAKE),
+      ctx.db
+        .query("datamappingRecords")
+        .withIndex("by_status_updatedAt", (q) =>
+          q
+            .eq("status", PAGO_VALIDADO_STATUS)
+            .gte("updatedAt", DATAMAPPING_UNIVERSE_START)
+            .lt("updatedAt", DATAMAPPING_UNIVERSE_END)
+        )
+        .take(RECONCILIATION_TAKE),
     ]);
 
     const byRefCw = new Map<string, { monto: number; logSource: string }>();
@@ -585,26 +601,87 @@ function getNextMonthStart(month: string): string {
   return `${ny}-${nm}-01`;
 }
 
+/** Límite de referencias por batch en getFechaTransaccionForReferencias. */
+const MAX_REFERENCIAS_FECHA_LOOKUP = 500;
+
 /**
- * Página de datamappingRecords filtrada por mes (updatedAt en rango).
- * Usado por buildDatamappingAggregates para ETL.
+ * Devuelve fechaTransaccion desde paymentRecords por referencia.
+ * Si hay varios paymentRecords con la misma referencia, prioriza el que tenga monto coincidente; si no, el primero.
+ * Usado por backfill de fechaTransaccion en datamappingRecords.
+ */
+export const getFechaTransaccionForReferencias = query({
+  args: {
+    referencias: v.array(
+      v.object({ referencia: v.string(), monto: v.number() })
+    ),
+  },
+  handler: async (ctx, { referencias }): Promise<Record<string, string>> => {
+    const refs = referencias.slice(0, MAX_REFERENCIAS_FECHA_LOOKUP);
+    const out: Record<string, string> = {};
+    for (const { referencia, monto } of refs) {
+      const records = await ctx.db
+        .query("paymentRecords")
+        .withIndex("by_referencia", (q) => q.eq("referencia", referencia))
+        .collect();
+      if (records.length === 0) continue;
+      const exactMatch = records.find((r) => r.monto === monto);
+      const chosen = exactMatch ?? records[0];
+      out[referencia] = chosen.fechaTransaccion;
+    }
+    return out;
+  },
+});
+
+/**
+ * Página de datamappingRecords filtrada por mes (updatedAt o fechaTransaccion en rango) y solo status = PAGO VALIDADO.
+ * Usado por buildDatamappingAggregates para ETL; los tableros mensual y anual solo usan pagos validados.
+ * Registros sin status (carga antigua) no se incluyen hasta que tengan status enriquecido/backfill.
+ * useFechaTransaccion: si true, filtra por fechaTransaccion; si false/undefined, por updatedAt (compatibilidad).
  */
 export const getDatamappingRecordsByMonthPaginated = query({
   args: {
     month: v.string(),
     paginationOpts: paginationOptsValidator,
+    useFechaTransaccion: v.optional(v.boolean()),
   },
-  handler: async (ctx, { month, paginationOpts }) => {
+  handler: async (ctx, { month, paginationOpts, useFechaTransaccion }) => {
     const start = `${month}-01`;
     const end = getNextMonthStart(month);
     const safeOpts = {
       ...paginationOpts,
       numItems: Math.min(paginationOpts.numItems, 1000),
     };
+    if (useFechaTransaccion) {
+      const result = await ctx.db
+        .query("datamappingRecords")
+        .withIndex("by_status_fechaTransaccion", (q) =>
+          q
+            .eq("status", PAGO_VALIDADO_STATUS)
+            .gte("fechaTransaccion", start)
+            .lt("fechaTransaccion", end)
+        )
+        .order("asc")
+        .paginate(safeOpts);
+      return {
+        page: result.page.map((r) => ({
+          referencia: r.referencia,
+          monto: r.monto,
+          updatedAt: r.updatedAt,
+          fechaTransaccion: r.fechaTransaccion,
+          tipoMovimiento: r.tipoMovimiento,
+          fuente: r.fuente,
+        })),
+        isDone: result.isDone,
+        continueCursor: result.continueCursor,
+      };
+    }
     const result = await ctx.db
       .query("datamappingRecords")
-      .withIndex("by_updatedAt", (q) =>
-        q.gte("updatedAt", start).lt("updatedAt", end)
+      .withIndex("by_status_updatedAt", (q) =>
+        q
+          .eq("status", PAGO_VALIDADO_STATUS)
+          .gte("updatedAt", start)
+          .lt("updatedAt", end)
       )
       .order("asc")
       .paginate(safeOpts);
@@ -613,6 +690,7 @@ export const getDatamappingRecordsByMonthPaginated = query({
         referencia: r.referencia,
         monto: r.monto,
         updatedAt: r.updatedAt,
+        fechaTransaccion: r.fechaTransaccion,
         tipoMovimiento: r.tipoMovimiento,
         fuente: r.fuente,
       })),
@@ -727,10 +805,6 @@ export const getJanuary2026DatamappingPage = query({
   },
 });
 
-/** Rango amplio para "todo el universo" (datamapping). */
-const DATAMAPPING_UNIVERSE_START = "2000-01-01T00:00:00.000Z";
-const DATAMAPPING_UNIVERSE_END = "2031-01-01T00:00:00.000Z";
-
 /**
  * Busca registros datamapping por RFC (índice by_rfc) en el rango desde enero hasta la fecha.
  * Requiere ETL de enriquecimiento previo. Filtra por updatedAt.
@@ -765,6 +839,12 @@ export const getDatamappingRecordsByRfcs = query({
       updatedAt: string;
       tipoMovimiento?: string;
       fuente?: string;
+      status?: string;
+      loteId?: string;
+      tramiteId?: string;
+      reciboPagoUrl?: string;
+      endMonth?: string;
+      declarationType?: string;
     }> = [];
     for (const rfc of rfcsNormalized) {
       const records = await ctx.db
@@ -774,13 +854,34 @@ export const getDatamappingRecordsByRfcs = query({
       for (const r of records) {
         const u = r.updatedAt ?? "";
         if (u >= updatedAtFrom && u < updatedAtTo) {
+          let fuente = r.fuente;
+          let status = r.status;
+          let loteId = r.loteId;
+          let reciboPagoUrl: string | undefined;
+          let endMonth: string | undefined;
+          let declarationType: string | undefined;
+          if (r.rawJson) {
+            const fromRaw = extractStatusAndFuenteFromRawJson(r.rawJson);
+            if (!status && fromRaw.status) status = fromRaw.status;
+            if (!fuente && fromRaw.fuente) fuente = fromRaw.fuente;
+            if (!loteId && fromRaw.loteId) loteId = fromRaw.loteId;
+            reciboPagoUrl = fromRaw.reciboPagoUrl;
+            endMonth = fromRaw.endMonth;
+            declarationType = fromRaw.declarationType;
+          }
           results.push({
             rfc,
             referencia: r.referencia,
             monto: r.monto,
             updatedAt: r.updatedAt,
             tipoMovimiento: r.tipoMovimiento,
-            fuente: r.fuente,
+            fuente: fuente ?? r.fuente,
+            status: status ?? r.status,
+            loteId: loteId ?? undefined,
+            tramiteId: r.tramiteId,
+            reciboPagoUrl: reciboPagoUrl ?? undefined,
+            endMonth: endMonth ?? undefined,
+            declarationType: declarationType ?? undefined,
           });
         }
       }
@@ -789,7 +890,7 @@ export const getDatamappingRecordsByRfcs = query({
   },
 });
 
-/** Último resultado guardado de la investigación RFC. */
+/** Último resultado guardado. reciboPagoUrl, endMonth y declarationType se obtienen siempre de rawJson (lookup por referencia). */
 export const getLatestRfcInvestigationResults = query({
   args: {},
   handler: async (ctx) => {
@@ -798,7 +899,28 @@ export const getLatestRfcInvestigationResults = query({
       .withIndex("by_runAt")
       .order("desc")
       .first();
-    return doc ?? null;
+    if (!doc || !doc.matches.length) return doc ?? null;
+    const matchesWithRawJson = await Promise.all(
+      doc.matches.map(async (m) => {
+        const record = await ctx.db
+          .query("datamappingRecords")
+          .withIndex("by_referencia", (q) => q.eq("referencia", m.referencia))
+          .first();
+        if (!record?.rawJson) return m;
+        const fromRaw = extractStatusAndFuenteFromRawJson(record.rawJson);
+        return {
+          ...m,
+          reciboPagoUrl: fromRaw.reciboPagoUrl ?? m.reciboPagoUrl,
+          endMonth: fromRaw.endMonth ?? (m as { endMonth?: string }).endMonth,
+          declarationType:
+            fromRaw.declarationType ?? (m as { declarationType?: string }).declarationType,
+        };
+      })
+    );
+    return {
+      ...doc,
+      matches: matchesWithRawJson,
+    };
   },
 });
 
@@ -942,7 +1064,7 @@ export const getDatamappingPageWithRawJsonByDateRange = query({
 });
 
 /**
- * Página de datamappingRecords por rango de updatedAt (o todo el universo si se omite).
+ * Página de datamappingRecords por rango de updatedAt, solo status = PAGO VALIDADO.
  * Usado por la action de reconciliación con scope mes, periodo o universo.
  */
 export const getDatamappingPageByDateRange = query({
@@ -957,7 +1079,9 @@ export const getDatamappingPageByDateRange = query({
     const to = updatedAtTo ?? DATAMAPPING_UNIVERSE_END;
     const result = await ctx.db
       .query("datamappingRecords")
-      .withIndex("by_updatedAt", (q) => q.gte("updatedAt", from).lt("updatedAt", to))
+      .withIndex("by_status_updatedAt", (q) =>
+        q.eq("status", PAGO_VALIDADO_STATUS).gte("updatedAt", from).lt("updatedAt", to)
+      )
       .order("asc")
       .paginate({ numItems, cursor });
     return {
@@ -1016,6 +1140,38 @@ export const getDatamappingPageIdForBackfillByRange = query({
       .paginate({ numItems, cursor });
     return {
       page: result.page.map((r) => ({ _id: r._id })),
+      isDone: result.isDone,
+      continueCursor: result.continueCursor,
+    };
+  },
+});
+
+/**
+ * Página de datamappingRecords con _id, referencia, monto, updatedAt en un rango.
+ * Para backfill de fechaTransaccion: lookup en paymentRecords por referencia, fallback a updatedAt.
+ */
+export const getDatamappingPageForFechaTransaccionBackfill = query({
+  args: {
+    updatedAtFrom: v.string(),
+    updatedAtTo: v.string(),
+    cursor: v.union(v.string(), v.null()),
+    numItems: v.optional(v.number()),
+  },
+  handler: async (ctx, { updatedAtFrom, updatedAtTo, cursor, numItems = 200 }) => {
+    const result = await ctx.db
+      .query("datamappingRecords")
+      .withIndex("by_updatedAt", (q) =>
+        q.gte("updatedAt", updatedAtFrom).lt("updatedAt", updatedAtTo)
+      )
+      .order("asc")
+      .paginate({ numItems, cursor });
+    return {
+      page: result.page.map((r) => ({
+        _id: r._id,
+        referencia: r.referencia,
+        monto: r.monto,
+        updatedAt: r.updatedAt,
+      })),
       isDone: result.isDone,
       continueCursor: result.continueCursor,
     };
@@ -1234,6 +1390,24 @@ export const getDatamappingUpdatedAtForReferencias = query({
       if (rec?.updatedAt) out[ref] = rec.updatedAt;
     }
     return out;
+  },
+});
+
+/** Referencias solo en CloudWatch con fuente payment (PAGO VALIDADO). Para listar referencia y status. */
+export const getReconciliationErrorsOnlyCwWithPayment = query({
+  args: {},
+  handler: async (ctx) => {
+    const allOnlyCw = await ctx.db
+      .query("reconciliationErrors")
+      .withIndex("by_kind", (q) => q.eq("kind", "onlyCw"))
+      .take(500);
+    return allOnlyCw
+      .filter((r) => r.logSource === "payment")
+      .map((r) => ({
+        referencia: r.referencia,
+        status: "PAGO VALIDADO" as const,
+        monto: r.monto,
+      }));
   },
 });
 

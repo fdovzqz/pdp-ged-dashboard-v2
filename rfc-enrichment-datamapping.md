@@ -28,6 +28,7 @@ Campos relevantes:
 | `enrichmentExtracted` | boolean (opc.) | `true` = ya enriquecido; `false` = pendiente. Bandera que controla el flujo. |
 | `placa` | string (opc.) | Placa/plate extraída de rawJson. |
 | `evoId`, `codiId`, `expirationDate`, `folioNumber`, `loteId`, `procedureCategory`, `tramiteId`, `userId` | string (opc.) | Campos extraídos por enriquecimiento (claves camelCase/snake_case en rawJson). |
+| `status` | string (opc.) | Estado del pago (ej. PAGO VALIDADO). Extraído en carga; indexado en `by_status_updatedAt` para que los tableros mensual/anual solo usen pagos validados. |
 
 Índices usados:
 
@@ -35,6 +36,7 @@ Campos relevantes:
 |--------|--------|-----|
 | `by_tipoMovimiento_updatedAt` | tipoMovimiento, updatedAt | Consulta legacy (deprecated para enriquecimiento). |
 | `by_enrichmentExtracted_updatedAt` | enrichmentExtracted, updatedAt | **Solo registros pendientes** (`enrichmentExtracted: false`) por rango de fechas. |
+| `by_status_updatedAt` | status, updatedAt | Tableros mensual/anual: solo registros con `status = "PAGO VALIDADO"`. |
 
 Con `enrichmentExtracted` se consulta únicamente el subset que falta por enriquecer.
 

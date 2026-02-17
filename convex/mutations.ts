@@ -467,7 +467,7 @@ const datamappingRecordValidator = v.object({
   tipoMovimiento: v.optional(v.string()),
   updatedAt: v.string(),
   rawJson: v.string(),
-  /** Enriquecimiento en la carga: RFC y campos extraídos de rawJson. Si se envían, se guardan y enrichmentExtracted: true. */
+  /** Enriquecimiento en la carga: RFC, status y campos extraídos de rawJson. Si se envían, se guardan y enrichmentExtracted: true. */
   rfc: v.optional(v.string()),
   placa: v.optional(v.string()),
   evoId: v.optional(v.string()),
@@ -478,6 +478,8 @@ const datamappingRecordValidator = v.object({
   procedureCategory: v.optional(v.string()),
   tramiteId: v.optional(v.string()),
   userId: v.optional(v.string()),
+  /** Estado del pago (ej. PAGO VALIDADO). Usado para filtrar tableros mensual/anual solo por pagos validados. */
+  status: v.optional(v.string()),
   enrichmentExtracted: v.optional(v.boolean()),
 });
 
@@ -527,6 +529,7 @@ export const upsertDatamappingBatch = mutation({
         ...(rec.procedureCategory !== undefined ? { procedureCategory: rec.procedureCategory } : {}),
         ...(rec.tramiteId !== undefined ? { tramiteId: rec.tramiteId } : {}),
         ...(rec.userId !== undefined ? { userId: rec.userId } : {}),
+        ...(rec.status !== undefined ? { status: rec.status } : {}),
       };
       if (existing) {
         await ctx.db.patch(existing._id, doc);
@@ -552,6 +555,8 @@ const patchDatamappingEnrichmentUpdateValidator = v.object({
   procedureCategory: v.optional(v.string()),
   tramiteId: v.optional(v.string()),
   userId: v.optional(v.string()),
+  status: v.optional(v.string()),
+  fuente: v.optional(v.string()),
 });
 
 /**
@@ -580,12 +585,35 @@ export const patchDatamappingRfcBatch = mutation({
         "procedureCategory",
         "tramiteId",
         "userId",
+        "status",
+        "fuente",
       ] as const;
       for (const k of optionalKeys) {
         const v = u[k];
         if (v !== undefined && v !== null) patch[k] = v;
       }
       await ctx.db.patch(u.id, patch);
+    }
+    return { patched: updates.length };
+  },
+});
+
+/**
+ * Actualiza fechaTransaccion en datamappingRecords.
+ * Usado por backfill que obtiene fechaTransaccion desde paymentRecords (por referencia) o usa updatedAt como fallback.
+ */
+export const patchDatamappingFechaTransaccionBatch = mutation({
+  args: {
+    updates: v.array(
+      v.object({
+        id: v.id("datamappingRecords"),
+        fechaTransaccion: v.string(),
+      })
+    ),
+  },
+  handler: async (ctx, { updates }) => {
+    for (const { id, fechaTransaccion } of updates) {
+      await ctx.db.patch(id, { fechaTransaccion });
     }
     return { patched: updates.length };
   },
@@ -675,6 +703,13 @@ export const insertRfcInvestigationResults = mutation({
         updatedAt: v.string(),
         tipoMovimiento: v.optional(v.string()),
         fuente: v.optional(v.string()),
+        status: v.optional(v.string()),
+        loteId: v.optional(v.string()),
+        tramiteId: v.optional(v.string()),
+        reciboPagoUrl: v.optional(v.string()),
+        referenciaPagoUrl: v.optional(v.string()),
+        endMonth: v.optional(v.string()),
+        declarationType: v.optional(v.string()),
       })
     ),
   },

@@ -62,7 +62,7 @@ const formatCompact = (n: number): string => {
 export function AnnualDashboard(): React.ReactElement {
   const searchParams = useSearchParams();
   const dataSource: DataSource =
-    searchParams.get("source") === "datamapping" ? "datamapping" : "cloudwatch";
+    searchParams.get("source") === "cloudwatch" ? "cloudwatch" : "datamapping";
 
   const annualApi =
     dataSource === "datamapping"

@@ -175,6 +175,14 @@ export default function JobsPage(): React.ReactElement {
   const [loadFromDateInngestJobId, setLoadFromDateInngestJobId] = useState<
     Id<"pipelineJobs"> | null
   >(null);
+  const [fechaTransaccionSinceDate, setFechaTransaccionSinceDate] =
+    useState("2024-01-01");
+  const [fechaTransaccionFullInngestTriggering, setFechaTransaccionFullInngestTriggering] =
+    useState(false);
+  const [fechaTransaccionFromDateInngestTriggering, setFechaTransaccionFromDateInngestTriggering] =
+    useState(false);
+  const [fechaTransaccionFromDateInngestJobId, setFechaTransaccionFromDateInngestJobId] =
+    useState<Id<"pipelineJobs"> | null>(null);
 
   const [selectedDatamappingMonths, setSelectedDatamappingMonths] = useState<
     Set<string>
@@ -266,6 +274,9 @@ export default function JobsPage(): React.ReactElement {
   );
   const latestDatamappingClearJob = useQuery(
     api.pipelineJobs.getLatestDatamappingClearJob
+  );
+  const latestFechaTransaccionFullJob = useQuery(
+    api.pipelineJobs.getLatestFechaTransaccionFullJob
   );
 
   const handleStartSync = useCallback(async (): Promise<void> => {
@@ -555,6 +566,57 @@ export default function JobsPage(): React.ReactElement {
       setLoadFromDateInngestTriggering(false);
     }
   }, [dynamoSinceDate]);
+
+  const handleFechaTransaccionFullInngest = useCallback(async (): Promise<void> => {
+    setFechaTransaccionFullInngestTriggering(true);
+    try {
+      const res = await fetch("/api/datamapping/fecha-transaccion-full", {
+        method: "POST",
+      });
+      const data = (await res.json()) as {
+        ok?: boolean;
+        error?: string;
+        jobId?: Id<"pipelineJobs">;
+      };
+      if (!res.ok || !data.ok) {
+        setDynamoError(data.error ?? "Error al iniciar backfill fechaTransaccion");
+      }
+    } catch (err) {
+      setDynamoError(
+        err instanceof Error ? err.message : "Error al iniciar backfill fechaTransaccion"
+      );
+    } finally {
+      setFechaTransaccionFullInngestTriggering(false);
+    }
+  }, []);
+
+  const handleFechaTransaccionFromDateInngest = useCallback(async (): Promise<void> => {
+    setFechaTransaccionFromDateInngestJobId(null);
+    setFechaTransaccionFromDateInngestTriggering(true);
+    try {
+      const res = await fetch("/api/datamapping/fecha-transaccion-from-date", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ sinceDate: fechaTransaccionSinceDate }),
+      });
+      const data = (await res.json()) as {
+        ok?: boolean;
+        error?: string;
+        jobId?: Id<"pipelineJobs">;
+      };
+      if (!res.ok || !data.ok) {
+        setDynamoError(data.error ?? "Error al iniciar backfill fechaTransaccion");
+      } else if (data.jobId) {
+        setFechaTransaccionFromDateInngestJobId(data.jobId);
+      }
+    } catch (err) {
+      setDynamoError(
+        err instanceof Error ? err.message : "Error al iniciar backfill fechaTransaccion"
+      );
+    } finally {
+      setFechaTransaccionFromDateInngestTriggering(false);
+    }
+  }, [fechaTransaccionSinceDate]);
 
   const toggleDatamappingMonth = (month: string): void => {
     setSelectedDatamappingMonths((prev) => {
@@ -1158,6 +1220,117 @@ export default function JobsPage(): React.ReactElement {
                 <p className="font-medium">Error en borrado</p>
                 <p className="mt-1 text-xs">
                   {formatErrorMessage(latestDatamappingClearJob.errorMessage)}
+                </p>
+              </div>
+            )}
+          </div>
+
+          {/* 4e. Backfill fechaTransaccion (DataMapping) */}
+          <div className="flex flex-wrap gap-4 items-end border-t border-slate-700/50 pt-4">
+            <h3 className="text-sm font-medium w-full">4e. Backfill fechaTransaccion (DataMapping)</h3>
+            <p className="text-xs text-muted-foreground w-full -mt-2">
+              Llena fechaTransaccion desde paymentRecords (por referencia); fallback a updatedAt si no existe en CloudWatch.
+            </p>
+            <div className="flex flex-col gap-1">
+              <label className="text-xs text-muted-foreground">
+                Desde fecha (updatedAt posterior a)
+              </label>
+              <input
+                type="date"
+                value={fechaTransaccionSinceDate}
+                onChange={(e) => setFechaTransaccionSinceDate(e.target.value)}
+                className="bg-slate-800 border border-slate-600 rounded px-3 py-2 text-sm"
+              />
+            </div>
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={handleFechaTransaccionFullInngest}
+              disabled={
+                fechaTransaccionFullInngestTriggering ||
+                (latestDatamappingClearJob?.status === "pending" ||
+                latestDatamappingClearJob?.status === "running") ||
+                (latestDatamappingFullHistoryJob?.status === "pending" ||
+                latestDatamappingFullHistoryJob?.status === "running") ||
+                (latestFechaTransaccionFullJob?.status === "pending" ||
+                latestFechaTransaccionFullJob?.status === "running") ||
+                dynamoReextractRunning ||
+                dynamoIncrementalRunning ||
+                dynamoLoading ||
+                syncing
+              }
+              className="gap-2 bg-white/3 border-border/50"
+            >
+              {fechaTransaccionFullInngestTriggering ? (
+                <Loader2 className="size-3.5 animate-spin" />
+              ) : null}
+              Llenar fechaTransaccion (Inngest)
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={handleFechaTransaccionFromDateInngest}
+              disabled={
+                fechaTransaccionFromDateInngestTriggering ||
+                (latestDatamappingClearJob?.status === "pending" ||
+                latestDatamappingClearJob?.status === "running") ||
+                (latestDatamappingFullHistoryJob?.status === "pending" ||
+                latestDatamappingFullHistoryJob?.status === "running") ||
+                (latestFechaTransaccionFullJob?.status === "pending" ||
+                latestFechaTransaccionFullJob?.status === "running") ||
+                dynamoReextractRunning ||
+                dynamoIncrementalRunning ||
+                dynamoLoading ||
+                syncing
+              }
+              className="gap-2 bg-white/3 border-border/50"
+            >
+              {fechaTransaccionFromDateInngestTriggering ? (
+                <Loader2 className="size-3.5 animate-spin" />
+              ) : null}
+              Llenar desde fecha (Inngest)
+            </Button>
+            {fechaTransaccionFromDateInngestJobId && (
+              <span className="text-xs text-muted-foreground">
+                Job creado. Ver en lista de jobs abajo.
+              </span>
+            )}
+            {latestFechaTransaccionFullJob?.status === "running" && (
+              <div className="space-y-2 w-full max-w-sm">
+                <Progress
+                  value={
+                    latestFechaTransaccionFullJob.progress?.total != null &&
+                    latestFechaTransaccionFullJob.progress?.total > 0
+                      ? ((latestFechaTransaccionFullJob.progress?.current ?? 0) /
+                          latestFechaTransaccionFullJob.progress!.total!) *
+                        100
+                      : 0
+                  }
+                />
+                <p className="text-xs text-muted-foreground">
+                  {latestFechaTransaccionFullJob.progress?.message ??
+                    `Mes ${latestFechaTransaccionFullJob.progress?.current ?? 0} de ${latestFechaTransaccionFullJob.progress?.total ?? "?"}`}
+                </p>
+              </div>
+            )}
+            {latestFechaTransaccionFullJob?.status === "completed" && (
+              <div className="rounded-lg bg-emerald-500/10 border border-emerald-500/30 p-3 text-sm text-emerald-400">
+                <p className="font-medium">Backfill fechaTransaccion completado</p>
+                <p className="mt-1 text-xs">
+                  {latestFechaTransaccionFullJob.result != null &&
+                  typeof latestFechaTransaccionFullJob.result === "object" &&
+                  "totalProcessed" in latestFechaTransaccionFullJob.result &&
+                  "totalUpdated" in latestFechaTransaccionFullJob.result
+                    ? `${(latestFechaTransaccionFullJob.result as { totalProcessed: number }).totalProcessed} procesados, ${(latestFechaTransaccionFullJob.result as { totalUpdated: number }).totalUpdated} actualizados`
+                    : "Completado"}
+                </p>
+              </div>
+            )}
+            {latestFechaTransaccionFullJob?.status === "failed" && (
+              <div className="rounded-lg bg-destructive/10 border border-destructive/30 p-3 text-sm text-destructive">
+                <p className="font-medium">Error en backfill fechaTransaccion</p>
+                <p className="mt-1 text-xs">
+                  {formatErrorMessage(latestFechaTransaccionFullJob.errorMessage)}
                 </p>
               </div>
             )}

@@ -176,6 +176,22 @@ export const getLatestDatamappingFullHistoryJob = query({
   },
 });
 
+/** Obtiene el job más reciente de backfill fechaTransaccion completo (para UI). */
+export const getLatestFechaTransaccionFullJob = query({
+  args: {},
+  handler: async (ctx) => {
+    const jobs = await ctx.db
+      .query("pipelineJobs")
+      .withIndex("by_startedAt", (q) => q.gte("startedAt", 0))
+      .order("desc")
+      .filter((q) =>
+        q.eq(q.field("jobType"), "datamapping_fecha_transaccion_full")
+      )
+      .take(1);
+    return jobs[0] ?? null;
+  },
+});
+
 /** Obtiene un job por id (para detalle/modal). */
 export const getPipelineJob = query({
   args: { jobId: v.id("pipelineJobs") },

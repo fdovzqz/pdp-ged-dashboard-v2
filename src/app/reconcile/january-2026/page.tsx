@@ -656,6 +656,10 @@ function ReconciliationErrorsDetail({
   const autoLoadRequestedRef = useRef(false);
   const hadMonthFilterRef = useRef(false);
   const getCountsByMonth = useAction(api.actions.getReconciliationErrorsCountByMonth);
+  const onlyCwWithPayment = useQuery(
+    api.queries.getReconciliationErrorsOnlyCwWithPayment,
+    kind === "onlyCw" ? {} : "skip"
+  );
   const page = useQuery(api.queries.getReconciliationErrorsPage, {
     kind,
     cursor,
@@ -874,6 +878,44 @@ function ReconciliationErrorsDetail({
             )}
           </div>
         ) : null}
+
+        {/* Referencias no encontradas con PAGO VALIDADO (solo en CW, fuente payment) */}
+        {kind === "onlyCw" && onlyCwWithPayment != null && onlyCwWithPayment.length > 0 && (
+          <div className="rounded-md border border-amber-500/30 bg-amber-500/5 p-4 space-y-2">
+            <p className="text-sm font-medium text-amber-200/90">
+              Referencias no encontradas con PAGO VALIDADO ({onlyCwWithPayment.length})
+            </p>
+            <div className="overflow-x-auto">
+              <Table>
+                <TableHeader>
+                  <TableRow className="border-slate-700/50">
+                    <TableHead>Referencia</TableHead>
+                    <TableHead>Status</TableHead>
+                    <TableHead className="text-right">Monto</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {onlyCwWithPayment.map((row) => (
+                    <TableRow key={row.referencia} className="border-slate-700/50">
+                      <TableCell className="font-mono text-sm">{row.referencia}</TableCell>
+                      <TableCell>
+                        <Badge
+                          variant="outline"
+                          className="text-xs border-emerald-500/50 text-emerald-400 bg-emerald-500/10"
+                        >
+                          {row.status}
+                        </Badge>
+                      </TableCell>
+                      <TableCell className="text-right tabular-nums">
+                        {row.monto != null ? row.monto.toLocaleString("es-MX") : "—"}
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </div>
+          </div>
+        )}
 
         {!hasMonthFilter && displayRows.length > 0 && (
           <p className="text-xs text-muted-foreground">

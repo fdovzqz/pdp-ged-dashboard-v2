@@ -285,6 +285,7 @@ export function mapDynamoItemToRecord(item: Record<string, unknown>): {
   tipoMovimiento?: string;
   updatedAt: string;
   rawJson: string;
+  status?: string;
 } {
   const str = (key: string, alt?: string): string => {
     const v = item[key] ?? (alt ? item[alt] : undefined);
@@ -329,6 +330,8 @@ export function mapDynamoItemToRecord(item: Record<string, unknown>): {
     str("movimiento") ||
     str("tramite");
   const updatedAt = str("updatedAt") || str("UpdatedAt");
+  const status =
+    str("status") || str("Status") || str("estatus") || str("Estatus");
 
   return {
     transactionId: (() => {
@@ -347,6 +350,7 @@ export function mapDynamoItemToRecord(item: Record<string, unknown>): {
     ...(tipoMovimiento ? { tipoMovimiento } : {}),
     updatedAt: updatedAt || new Date().toISOString(),
     rawJson: JSON.stringify(item),
+    ...(status ? { status } : {}),
   };
 }
 
@@ -400,6 +404,120 @@ export function extractRfcFromRawJson(rawJson: string): string | undefined {
   }
 }
 
+/** Busca un string en obj o en objetos anidados (datos, payload, data, body). Claves: reciboPagoUrl, reciboPagoURL, etc. */
+function getReciboPagoUrlFromObj(obj: Record<string, unknown>): string | undefined {
+  const keys = [
+    "reciboPagoUrl",
+    "reciboPagoURL",
+    "urlPago",
+    "urlDePago",
+    "url de pago",
+    "mitUrl",
+  ];
+  const from = (o: Record<string, unknown> | null | undefined): string | undefined => {
+    if (!o || typeof o !== "object") return undefined;
+    for (const k of keys) {
+      const v = o[k];
+      if (v !== undefined && v !== null && typeof v === "string") {
+        const t = v.trim();
+        if (t !== "") return t;
+      }
+    }
+    return undefined;
+  };
+  const atRoot = from(obj);
+  if (atRoot) return atRoot;
+  const nested = ["datos", "payload", "data", "body", "parameters", "params"];
+  for (const key of nested) {
+    const child = obj[key];
+    if (child && typeof child === "object" && !Array.isArray(child)) {
+      const inChild = from(child as Record<string, unknown>);
+      if (inChild) return inChild;
+    }
+  }
+  return undefined;
+}
+
+/** Busca un string en obj (raíz o anidado en datos, payload, data, body) para las claves dadas. */
+function getStringFromObjOrNested(
+  obj: Record<string, unknown>,
+  ...keys: string[]
+): string | undefined {
+  const from = (o: Record<string, unknown> | null | undefined): string | undefined => {
+    if (!o || typeof o !== "object") return undefined;
+    return getFirstStringPublic(o, ...keys);
+  };
+  const atRoot = from(obj);
+  if (atRoot) return atRoot;
+  for (const key of ["datos", "payload", "data", "body", "parameters", "params"]) {
+    const child = obj[key];
+    if (child && typeof child === "object" && !Array.isArray(child)) {
+      const v = from(child as Record<string, unknown>);
+      if (v) return v;
+    }
+  }
+  return undefined;
+}
+
+/** Extrae status, fuente, loteId, reciboPagoUrl, endMonth y declarationType del rawJson (raíz o anidado). */
+export function extractStatusAndFuenteFromRawJson(rawJson: string): {
+  status?: string;
+  fuente?: string;
+  loteId?: string;
+  reciboPagoUrl?: string;
+  endMonth?: string;
+  declarationType?: string;
+} {
+  try {
+    const parsed = JSON.parse(rawJson) as unknown;
+    if (parsed == null || typeof parsed !== "object") return {};
+    const o = parsed as Record<string, unknown>;
+    const status =
+      getFirstStringPublic(o, "status", "Status", "estatus", "Estatus");
+    const fuente =
+      getFirstStringPublic(o, "fuente", "Fuente", "source", "Source");
+    const loteId = getFirstStringPublic(o, "loteId", "lote_id", "lote");
+    const reciboPagoUrl = getReciboPagoUrlFromObj(o);
+    const endMonth = getStringFromObjOrNested(
+      o,
+      "endMonth",
+      "end_month",
+      "mesFin"
+    );
+    const declarationType = getStringFromObjOrNested(
+      o,
+      "declarationType",
+      "declaration_type",
+      "tipoDeclaracion",
+      "tipo_declaracion"
+    );
+    return {
+      ...(status ? { status } : {}),
+      ...(fuente ? { fuente } : {}),
+      ...(loteId ? { loteId } : {}),
+      ...(reciboPagoUrl ? { reciboPagoUrl } : {}),
+      ...(endMonth ? { endMonth } : {}),
+      ...(declarationType ? { declarationType } : {}),
+    };
+  } catch {
+    return {};
+  }
+}
+
+function getFirstStringPublic(
+  obj: Record<string, unknown>,
+  ...keys: string[]
+): string | undefined {
+  for (const k of keys) {
+    const v = obj[k];
+    if (v === undefined || v === null) continue;
+    const s = typeof v === "string" ? v : String(v);
+    const trimmed = s.trim();
+    if (trimmed !== "") return trimmed;
+  }
+  return undefined;
+}
+
 /** Devuelve el primer valor no nulo/undefined de obj para las claves dadas, normalizado a string. */
 function getFirstString(
   obj: Record<string, unknown>,
@@ -438,6 +556,8 @@ const ENRICHMENT_KEY_MAP: Record<
   ],
   tramiteId: ["tramiteId", "tramite_id", "tramite"],
   userId: ["userId", "user_id"],
+  status: ["status", "Status", "estatus", "Estatus"],
+  fuente: ["fuente", "Fuente", "source", "Source"],
 };
 
 export type EnrichmentFields = {
@@ -451,6 +571,8 @@ export type EnrichmentFields = {
   procedureCategory?: string;
   tramiteId?: string;
   userId?: string;
+  status?: string;
+  fuente?: string;
 };
 
 /**

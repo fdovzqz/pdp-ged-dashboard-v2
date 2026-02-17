@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import Link from "next/link";
 import { useQuery, useAction } from "convex/react";
 import { api } from "convex/_generated/api";
@@ -21,7 +21,7 @@ import {
 } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Download, FileText, Loader2, Search } from "lucide-react";
+import { AlertCircle, Download, FileText, Loader2, Search } from "lucide-react";
 import { timestampToMexicoDate } from "@/lib/mexicoDateRange";
 
 /** RFCs a investigar: contribuyentes que pagaron algún tipo de declaración. */
@@ -93,7 +93,19 @@ type Match = {
   updatedAt: string;
   tipoMovimiento?: string;
   fuente?: string;
+  status?: string;
+  loteId?: string;
+  tramiteId?: string;
+  reciboPagoUrl?: string;
+  endMonth?: string;
+  declarationType?: string;
 };
+
+/** URL del recibo: reciboPagoUrl (nombre correcto) o referenciaPagoUrl (datos guardados antes del cambio). */
+function getReciboUrl(m: Match): string | undefined {
+  const url = m.reciboPagoUrl ?? (m as { referenciaPagoUrl?: string }).referenciaPagoUrl;
+  return url && typeof url === "string" && url.trim() !== "" ? url.trim() : undefined;
+}
 
 function escapeCsv(s: string): string {
   if (/[",\n\r]/.test(s)) return `"${s.replace(/"/g, '""')}"`;
@@ -101,7 +113,8 @@ function escapeCsv(s: string): string {
 }
 
 function buildCsv(matches: Match[]): string {
-  const header = "RFC,referencia,monto,fechaPago,tipoMovimiento,fuente\n";
+  const header =
+    "RFC,referencia,monto,fechaPago,tipoMovimiento,status,source,loteId,tramiteId,reciboPagoUrl,endMonth,declarationType\n";
   const body = matches
     .map((m) =>
       [
@@ -110,7 +123,13 @@ function buildCsv(matches: Match[]): string {
         m.monto,
         escapeCsv(timestampToMexicoDate(m.updatedAt) || m.updatedAt),
         escapeCsv(m.tipoMovimiento ?? ""),
+        escapeCsv(m.status ?? ""),
         escapeCsv(m.fuente ?? ""),
+        escapeCsv(m.loteId ?? ""),
+        escapeCsv(m.tramiteId ?? ""),
+        escapeCsv(m.reciboPagoUrl ?? ""),
+        escapeCsv(m.endMonth ?? ""),
+        escapeCsv(m.declarationType ?? ""),
       ].join(",")
     )
     .join("\n");
@@ -160,6 +179,17 @@ export default function RfcReferenciasPage(): React.ReactElement {
   const rfcWithMatches = new Set(matches.map((m) => m.rfc));
   const rfcWithoutMatches = RFC_LIST.filter((r) => !rfcWithMatches.has(r));
   const isLoading = savedResults === undefined;
+
+  /** Agrupa referencias por RFC para mostrar cada RFC con sus referencias juntas. */
+  const matchesByRfc = useMemo(() => {
+    const map = new Map<string, Match[]>();
+    for (const m of matches) {
+      const list = map.get(m.rfc) ?? [];
+      list.push(m);
+      map.set(m.rfc, list);
+    }
+    return map;
+  }, [matches]);
 
   return (
     <div className="min-h-screen bg-background p-6">
@@ -264,39 +294,145 @@ export default function RfcReferenciasPage(): React.ReactElement {
             </CardHeader>
             <CardContent>
               {matches.length > 0 ? (
-                <div className="overflow-x-auto">
-                  <Table>
-                    <TableHeader>
-                      <TableRow>
-                        <TableHead>RFC</TableHead>
-                        <TableHead>Referencia</TableHead>
-                        <TableHead className="text-right">Monto</TableHead>
-                        <TableHead>Fecha pago</TableHead>
-                        <TableHead>Tipo movimiento</TableHead>
-                        <TableHead>Fuente</TableHead>
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {matches.map((m, i) => (
-                        <TableRow key={`${m.rfc}-${m.referencia}-${i}`}>
-                          <TableCell className="font-mono text-sm">{m.rfc}</TableCell>
-                          <TableCell className="font-mono text-sm">{m.referencia}</TableCell>
-                          <TableCell className="text-right tabular-nums">
-                            ${m.monto.toLocaleString("es-MX")}
-                          </TableCell>
-                          <TableCell className="text-sm">
-                            {timestampToMexicoDate(m.updatedAt) || m.updatedAt.slice(0, 10)}
-                          </TableCell>
-                          <TableCell className="text-sm">{m.tipoMovimiento ?? "—"}</TableCell>
-                          <TableCell>
-                            <Badge variant="outline" className="text-xs">
-                              {m.fuente ?? "—"}
-                            </Badge>
-                          </TableCell>
-                        </TableRow>
-                      ))}
-                    </TableBody>
-                  </Table>
+                <div className="space-y-6">
+                  {Array.from(matchesByRfc.entries()).map(([rfc, refs]) => (
+                    <div key={rfc} className="space-y-2">
+                      <h3 className="text-sm font-medium text-muted-foreground flex items-center gap-2">
+                        <Badge variant="secondary" className="font-mono">
+                          {rfc}
+                        </Badge>
+                        <span>{refs.length} referencia{refs.length !== 1 ? "s" : ""}</span>
+                      </h3>
+                      <div className="overflow-x-auto rounded-md border border-slate-700/50">
+                        <Table>
+                          <TableHeader>
+                            <TableRow>
+                              <TableHead>Referencia</TableHead>
+                              <TableHead className="text-right">Monto</TableHead>
+                              <TableHead>Fecha pago</TableHead>
+                              <TableHead>Tipo movimiento</TableHead>
+                              <TableHead>Status</TableHead>
+                              <TableHead>Source</TableHead>
+                              <TableHead>Lote ID</TableHead>
+                              <TableHead>Trámite ID</TableHead>
+                              <TableHead>URL recibo</TableHead>
+                              <TableHead>End month</TableHead>
+                              <TableHead>Tipo declaración</TableHead>
+                            </TableRow>
+                          </TableHeader>
+                          <TableBody>
+                            {(() => {
+                              const decRefs = refs.filter(
+                                (m) => (m.fuente ?? "").toUpperCase() === "DEC"
+                              );
+                              const nonDecRefs = refs.filter(
+                                (m) => (m.fuente ?? "").toUpperCase() !== "DEC"
+                              );
+                              const decAggregated =
+                                decRefs.length > 0
+                                  ? {
+                                      referencia: `DEC (${decRefs.length} pago${decRefs.length !== 1 ? "s" : ""})`,
+                                      monto: decRefs.reduce((s, m) => s + m.monto, 0),
+                                      updatedAt: decRefs[0]?.updatedAt ?? "",
+                                      tipoMovimiento: decRefs[0]?.tipoMovimiento ?? "—",
+                                      status: decRefs.some(
+                                        (m) =>
+                                          (m.status ?? "").toUpperCase() === "PAGO VALIDADO"
+                                      )
+                                        ? "PAGO VALIDADO"
+                                        : decRefs[0]?.status ?? "—",
+                                      fuente: "DEC" as const,
+                                      isDecRow: true,
+                                    }
+                                  : null;
+                              const rowsToShow: Array<
+                                Match & { isDecRow?: boolean; referencia?: string }
+                              > = [
+                                ...nonDecRefs.map((m) => ({ ...m, isDecRow: false })),
+                                ...(decAggregated ? [decAggregated] : []),
+                              ];
+                              return rowsToShow.map((m, i) => (
+                                <TableRow
+                                  key={
+                                    m.isDecRow
+                                      ? `${rfc}-dec-aggregated`
+                                      : `${m.rfc}-${m.referencia}-${i}`
+                                  }
+                                >
+                                  <TableCell className="font-mono text-sm">
+                                    {m.referencia}
+                                  </TableCell>
+                                  <TableCell className="text-right tabular-nums">
+                                    ${m.monto.toLocaleString("es-MX")}
+                                  </TableCell>
+                                  <TableCell className="text-sm">
+                                    {m.isDecRow
+                                      ? "—"
+                                      : timestampToMexicoDate(m.updatedAt) || m.updatedAt.slice(0, 10)}
+                                  </TableCell>
+                                  <TableCell className="text-sm">
+                                    {m.tipoMovimiento ?? "—"}
+                                  </TableCell>
+                                  <TableCell>
+                                    <Badge
+                                      variant="outline"
+                                      className={
+                                        (m.status ?? "").toUpperCase() === "PAGO VALIDADO"
+                                          ? "text-xs border-emerald-500/50 text-emerald-400 bg-emerald-500/10"
+                                          : "text-xs"
+                                      }
+                                    >
+                                      {m.status ?? "—"}
+                                    </Badge>
+                                  </TableCell>
+                                  <TableCell>
+                                    <Badge variant="outline" className="text-xs">
+                                      {m.fuente ?? "—"}
+                                    </Badge>
+                                  </TableCell>
+                                  <TableCell className="font-mono text-xs">
+                                    {!("isDecRow" in m && m.isDecRow)
+                                      ? (m.loteId ?? "—")
+                                      : "—"}
+                                  </TableCell>
+                                  <TableCell className="font-mono text-xs max-w-[120px] truncate" title={m.tramiteId}>
+                                    {!("isDecRow" in m && m.isDecRow)
+                                      ? (m.tramiteId ?? "—")
+                                      : "—"}
+                                  </TableCell>
+                                  <TableCell className="text-xs">
+                                    {!("isDecRow" in m && m.isDecRow) && getReciboUrl(m) ? (
+                                      <a
+                                        href={getReciboUrl(m)}
+                                        target="_blank"
+                                        rel="noopener noreferrer"
+                                        className="text-emerald-400 hover:text-emerald-300 underline truncate block max-w-[140px]"
+                                        title={getReciboUrl(m)}
+                                      >
+                                        Recibo
+                                      </a>
+                                    ) : (
+                                      "—"
+                                    )}
+                                  </TableCell>
+                                  <TableCell className="font-mono text-xs">
+                                    {!("isDecRow" in m && m.isDecRow)
+                                      ? (m.endMonth ?? "—")
+                                      : "—"}
+                                  </TableCell>
+                                  <TableCell className="text-sm">
+                                    {!("isDecRow" in m && m.isDecRow)
+                                      ? (m.declarationType ?? "—")
+                                      : "—"}
+                                  </TableCell>
+                                </TableRow>
+                              ));
+                            })()}
+                          </TableBody>
+                        </Table>
+                      </div>
+                    </div>
+                  ))}
                 </div>
               ) : (
                 <p className="text-muted-foreground">
@@ -304,6 +440,36 @@ export default function RfcReferenciasPage(): React.ReactElement {
                   la investigación (rango: 1 enero a hoy) y guardar en la tabla.
                 </p>
               )}
+            </CardContent>
+          </Card>
+        )}
+
+        {/* RFC sin coincidencias */}
+        {!isLoading && savedResults && rfcWithoutMatches.length > 0 && (
+          <Card className="border-amber-500/30 bg-amber-500/5">
+            <CardHeader>
+              <CardTitle className="text-base flex items-center gap-2">
+                <AlertCircle className="size-4 text-amber-500" />
+                RFC sin coincidencias
+              </CardTitle>
+              <CardDescription>
+                {rfcWithoutMatches.length} RFC de la lista no tienen referencias de pago en datamapping
+                en el rango {savedResults.fromDate}–{savedResults.toDate}. Pueden no haber pagado en ese
+                periodo o el RFC no estar presente en el JSON enriquecido.
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <div className="flex flex-wrap gap-2">
+                {rfcWithoutMatches.map((rfc) => (
+                  <Badge
+                    key={rfc}
+                    variant="outline"
+                    className="font-mono text-xs border-amber-500/40 text-amber-200/90"
+                  >
+                    {rfc}
+                  </Badge>
+                ))}
+              </div>
             </CardContent>
           </Card>
         )}
