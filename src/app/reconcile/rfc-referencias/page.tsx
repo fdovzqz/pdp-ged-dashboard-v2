@@ -345,9 +345,18 @@ export default function RfcReferenciasPage(): React.ReactElement {
                                       isDecRow: true,
                                     }
                                   : null;
-                              const rowsToShow: Array<
-                                Match & { isDecRow?: boolean; referencia?: string }
-                              > = [
+                              type RefTableRow =
+                                | (Match & { isDecRow?: boolean })
+                                | {
+                                    referencia: string;
+                                    monto: number;
+                                    updatedAt: string;
+                                    tipoMovimiento: string;
+                                    status: string;
+                                    fuente: "DEC";
+                                    isDecRow: boolean;
+                                  };
+                              const rowsToShow: RefTableRow[] = [
                                 ...nonDecRefs.map((m) => ({ ...m, isDecRow: false })),
                                 ...(decAggregated ? [decAggregated] : []),
                               ];
@@ -356,7 +365,7 @@ export default function RfcReferenciasPage(): React.ReactElement {
                                   key={
                                     m.isDecRow
                                       ? `${rfc}-dec-aggregated`
-                                      : `${m.rfc}-${m.referencia}-${i}`
+                                      : `${"rfc" in m ? m.rfc : rfc}-${m.referencia}-${i}`
                                   }
                                 >
                                   <TableCell className="font-mono text-sm">
@@ -392,22 +401,25 @@ export default function RfcReferenciasPage(): React.ReactElement {
                                   </TableCell>
                                   <TableCell className="font-mono text-xs">
                                     {!("isDecRow" in m && m.isDecRow)
-                                      ? (m.loteId ?? "—")
+                                      ? ((m as Match).loteId ?? "—")
                                       : "—"}
                                   </TableCell>
-                                  <TableCell className="font-mono text-xs max-w-[120px] truncate" title={m.tramiteId}>
+                                  <TableCell
+                                    className="font-mono text-xs max-w-[120px] truncate"
+                                    title={!("isDecRow" in m && m.isDecRow) ? (m as Match).tramiteId : undefined}
+                                  >
                                     {!("isDecRow" in m && m.isDecRow)
-                                      ? (m.tramiteId ?? "—")
+                                      ? ((m as Match).tramiteId ?? "—")
                                       : "—"}
                                   </TableCell>
                                   <TableCell className="text-xs">
-                                    {!("isDecRow" in m && m.isDecRow) && getReciboUrl(m) ? (
+                                    {!("isDecRow" in m && m.isDecRow) && getReciboUrl(m as Match) ? (
                                       <a
-                                        href={getReciboUrl(m)}
+                                        href={getReciboUrl(m as Match)}
                                         target="_blank"
                                         rel="noopener noreferrer"
                                         className="text-emerald-400 hover:text-emerald-300 underline truncate block max-w-[140px]"
-                                        title={getReciboUrl(m)}
+                                        title={getReciboUrl(m as Match)}
                                       >
                                         Recibo
                                       </a>
@@ -417,12 +429,12 @@ export default function RfcReferenciasPage(): React.ReactElement {
                                   </TableCell>
                                   <TableCell className="font-mono text-xs">
                                     {!("isDecRow" in m && m.isDecRow)
-                                      ? (m.endMonth ?? "—")
+                                      ? ((m as Match).endMonth ?? "—")
                                       : "—"}
                                   </TableCell>
                                   <TableCell className="text-sm">
                                     {!("isDecRow" in m && m.isDecRow)
-                                      ? (m.declarationType ?? "—")
+                                      ? ((m as Match).declarationType ?? "—")
                                       : "—"}
                                   </TableCell>
                                 </TableRow>
