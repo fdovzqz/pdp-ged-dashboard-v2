@@ -144,7 +144,7 @@ function formatRunAt(ts: number): string {
   });
 }
 
-export default function RfcReferenciasPage(): React.ReactElement {
+export default function ConsultasReferenciaRfcPlacaPage(): React.ReactElement {
   const savedResults = useQuery(api.queries.getLatestRfcInvestigationResults);
   const runAction = useAction(api.actions.runRfcInvestigationAndSave);
   const [running, setRunning] = useState(false);
@@ -192,21 +192,24 @@ export default function RfcReferenciasPage(): React.ReactElement {
   }, [matches]);
 
   return (
-    <div className="min-h-screen bg-background p-6">
+    <div className="p-6 md:p-8">
       <div className="max-w-6xl mx-auto space-y-6">
         {/* Header */}
         <div className="flex flex-wrap items-center justify-between gap-4">
           <div>
             <h1 className="text-2xl font-semibold tracking-tight flex items-center gap-2">
               <FileText className="size-6" />
-              Investigación RFC → Referencias de Pago
+              Consultas: Referencia, RFC, Placa
             </h1>
             <p className="text-sm text-muted-foreground mt-1">
-              Rango: 1 de enero a la fecha. Los resultados se guardan en la tabla{" "}
-              <code className="text-xs bg-muted px-1 rounded">rfcInvestigationResults</code>.
-              Requiere enriquecimiento previo en{" "}
+              Consulta por <strong>Referencia</strong>: usa{" "}
+              <Link href="/reconciliacion/consultas-referencia" className="text-emerald-400 hover:text-emerald-300 underline">
+                Consultas Referencia
+              </Link>
+              . Por <strong>RFC</strong>: lista fija de RFC y búsqueda guardada abajo. Por <strong>Placa</strong>: próximamente.
+              Requiere enriquecimiento en{" "}
               <Link href="/configuracion/datos" className="text-emerald-400 hover:text-emerald-300 underline">
-                Datos
+                Configuración → Datos
               </Link>
               .
             </p>
@@ -239,6 +242,19 @@ export default function RfcReferenciasPage(): React.ReactElement {
             )}
           </div>
         </div>
+
+        {/* Placa: placeholder */}
+        <Card className="border-slate-700/50 bg-slate-900/30 border-dashed">
+          <CardHeader>
+            <CardTitle className="text-base">Consulta por Placa</CardTitle>
+            <CardDescription>
+              Búsqueda por placa en datamappingRecords (cuando esté disponible).
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <p className="text-sm text-muted-foreground">Próximamente.</p>
+          </CardContent>
+        </Card>
 
         {/* Info */}
         <Card className="border-slate-700/50 bg-slate-900/30">

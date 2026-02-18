@@ -6,14 +6,6 @@ import { useMutation, useQuery } from "convex/react";
 import { api } from "convex/_generated/api";
 import { Button } from "@/components/ui/button";
 import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogFooter,
-  DialogHeader,
-  DialogTitle,
-} from "@/components/ui/dialog";
-import {
   Table,
   TableBody,
   TableCell,
@@ -22,35 +14,17 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Loader2, Save, Plus, Trash2, CloudDownload, Layers } from "lucide-react";
-import { IngestionStatus } from "@/components/dashboard/IngestionStatus";
-import {
-  PERIOD_START,
-  PERIOD_END,
-  generateMonthRange,
-} from "@/lib/constants";
-
-const ALL_MONTHS = generateMonthRange(PERIOD_START, PERIOD_END);
-
 export default function GestionDatosPage(): React.ReactElement {
-  const [selectedMonth, setSelectedMonth] = useState<string | null>(null);
   const [editing, setEditing] = useState<string | null>(null);
   const [editDesc, setEditDesc] = useState("");
   const [newCodigo, setNewCodigo] = useState("");
   const [newDescripcion, setNewDescripcion] = useState("");
   const [newAliasVariante, setNewAliasVariante] = useState("");
   const [newAliasCodigo, setNewAliasCodigo] = useState("");
-  const [deleteMonthDialogOpen, setDeleteMonthDialogOpen] = useState(false);
-  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
-  const [deleting, setDeleting] = useState(false);
   const [seeding, setSeeding] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<Record<string, unknown> | null>(null);
 
-  const allMonthsStatus = useQuery(api.queries.getAllMonthsStatus, {});
-  const selectedMonthStats = useQuery(
-    api.queries.getMonthStats,
-    selectedMonth ? { month: selectedMonth } : "skip"
-  );
   const codes = useQuery(api.movementCodes.listMovementCodes);
   const aliases = useQuery(api.movementCodes.listMovementAliases);
   const seedMovementCodes = useMutation(api.movementCodes.seedMovementCodes);
@@ -58,43 +32,6 @@ export default function GestionDatosPage(): React.ReactElement {
   const deleteCode = useMutation(api.movementCodes.deleteMovementCode);
   const upsertAlias = useMutation(api.movementCodes.upsertMovementAlias);
   const deleteAlias = useMutation(api.movementCodes.deleteMovementAlias);
-  const deletePaymentsByMonth = useMutation(api.mutations.deletePaymentsByMonth);
-  const deleteMonthStats = useMutation(api.mutations.deleteMonthStats);
-
-  const handleDeleteAll = async (): Promise<void> => {
-    setDeleting(true);
-    try {
-      for (const month of ALL_MONTHS) {
-        while (true) {
-          const res = await deletePaymentsByMonth({ month });
-          if (res.deleted === 0) break;
-        }
-        await deleteMonthStats({ month });
-      }
-      setDeleteDialogOpen(false);
-    } catch (err) {
-      console.error(err);
-    } finally {
-      setDeleting(false);
-    }
-  };
-
-  const handleDeleteMonth = async (month: string): Promise<void> => {
-    setDeleting(true);
-    try {
-      while (true) {
-        const res = await deletePaymentsByMonth({ month });
-        if (res.deleted === 0) break;
-      }
-      await deleteMonthStats({ month });
-      setDeleteMonthDialogOpen(false);
-      setSelectedMonth(null);
-    } catch (err) {
-      console.error(err);
-    } finally {
-      setDeleting(false);
-    }
-  };
 
   const handleSeedMovementCodes = async (): Promise<void> => {
     setSeeding(true);
@@ -184,8 +121,7 @@ export default function GestionDatosPage(): React.ReactElement {
             Gestión de datos
           </h1>
           <p className="text-muted-foreground mt-1">
-            Registros cargados y configuración de códigos de movimiento.
-            Ejecuta cargas en{" "}
+            Configuración de códigos de movimiento y aliases. Ejecuta cargas en{" "}
             <Link
               href="/configuracion/carga-fuentes"
               className="text-emerald-400 hover:text-emerald-300 font-medium inline-flex items-center gap-1"
@@ -204,57 +140,6 @@ export default function GestionDatosPage(): React.ReactElement {
             .
           </p>
         </div>
-
-        {/* Registros cargados */}
-        <section>
-          <div className="flex flex-wrap items-center justify-between gap-3 mb-3">
-            <h2 className="text-lg font-semibold">Registros cargados</h2>
-            {selectedMonth && (
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => setDeleteMonthDialogOpen(true)}
-                disabled={deleting}
-                className="gap-2 bg-white/3 border-border/50 text-red-400 hover:text-red-300"
-              >
-                <Trash2 className="size-3.5" />
-                Borrar mes {selectedMonth}
-              </Button>
-            )}
-          </div>
-          {allMonthsStatus ? (
-            <IngestionStatus
-              allMonthsStatus={allMonthsStatus}
-              selectedMonth={selectedMonth}
-              selectedMonthDetail={
-                selectedMonth && selectedMonthStats?.ingestionStatus
-                  ? {
-                      totalRecords: selectedMonthStats.ingestionStatus.totalRecords,
-                      daysWithData: selectedMonthStats.ingestionStatus.daysWithData,
-                      byDate: selectedMonthStats.ingestionStatus.byDate,
-                    }
-                  : undefined
-              }
-              onMonthSelect={setSelectedMonth}
-            />
-          ) : (
-            <div className="glass-card rounded-xl p-5 text-muted-foreground text-sm">
-              Cargando...
-            </div>
-          )}
-          <div className="mt-3">
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => setDeleteDialogOpen(true)}
-              disabled={deleting}
-              className="gap-2 bg-white/3 border-border/50 text-red-400 hover:text-red-300"
-            >
-              <Trash2 className="size-3.5" />
-              Borrar Todo
-            </Button>
-          </div>
-        </section>
 
         {/* Códigos y descripciones de movimiento */}
         <div className="glass-card rounded-xl p-6 space-y-4">
@@ -481,67 +366,6 @@ export default function GestionDatosPage(): React.ReactElement {
         )}
       </div>
 
-      <Dialog open={deleteMonthDialogOpen} onOpenChange={setDeleteMonthDialogOpen}>
-        <DialogContent className="glass-card-elevated border-border/50">
-          <DialogHeader>
-            <DialogTitle>Borrar mes {selectedMonth}</DialogTitle>
-            <DialogDescription>
-              Se eliminarán todos los registros y estadísticas de {selectedMonth}.
-              Los datos se pueden volver a sincronizar desde Carga de fuentes.
-            </DialogDescription>
-          </DialogHeader>
-          <DialogFooter>
-            <Button
-              variant="destructive"
-              onClick={() => selectedMonth && handleDeleteMonth(selectedMonth)}
-              disabled={deleting || !selectedMonth}
-              size="sm"
-            >
-              {deleting ? "Eliminando..." : "Eliminar mes"}
-            </Button>
-            <Button
-              variant="outline"
-              onClick={() => setDeleteMonthDialogOpen(false)}
-              disabled={deleting}
-              size="sm"
-              className="bg-white/3 border-border/50"
-            >
-              Cancelar
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
-      <Dialog open={deleteDialogOpen} onOpenChange={setDeleteDialogOpen}>
-        <DialogContent className="glass-card-elevated border-border/50">
-          <DialogHeader>
-            <DialogTitle>Borrar todo</DialogTitle>
-            <DialogDescription>
-              Se eliminarán todos los registros de pago y estadísticas de {PERIOD_START} a {PERIOD_END}.
-              Los datos se pueden volver a sincronizar desde Carga de fuentes.
-            </DialogDescription>
-          </DialogHeader>
-          <DialogFooter>
-            <Button
-              variant="destructive"
-              onClick={handleDeleteAll}
-              disabled={deleting}
-              size="sm"
-            >
-              {deleting ? "Eliminando..." : "Eliminar todo"}
-            </Button>
-            <Button
-              variant="outline"
-              onClick={() => setDeleteDialogOpen(false)}
-              disabled={deleting}
-              size="sm"
-              className="bg-white/3 border-border/50"
-            >
-              Cancelar
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
     </div>
   );
 }

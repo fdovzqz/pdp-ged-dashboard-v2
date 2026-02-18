@@ -113,7 +113,7 @@ function formatScopeLabel(scopeId: string): string {
   return `${MONTH_NAMES[m] ?? m} ${scopeId.slice(0, 4)}`;
 }
 
-export default function ReconcileJanuary2026Page(): React.ReactElement {
+export default function DiferenciasFuentesPage(): React.ReactElement {
   const convex = useConvex();
   const runReconciliationAction = useAction(api.actions.runReconciliation);
   const summary = useQuery(api.queries.getReconciliationSummaryJanuary2026);
@@ -238,11 +238,16 @@ export default function ReconcileJanuary2026Page(): React.ReactElement {
         <div className="flex flex-wrap items-center justify-between gap-4">
           <div>
             <h1 className="text-2xl font-semibold tracking-tight">
-              Reconciliación
+              Diferencias entre fuentes
               {scopeLabel != null ? `: ${scopeLabel}` : ""}
             </h1>
             <p className="text-sm text-muted-foreground mt-1">
               Cruce en Convex: paymentRecords vs datamappingRecords. Elige todo el universo, un mes o un periodo.
+              Para investigar una referencia concreta, usa{" "}
+              <a href="/reconciliacion/consultas-referencia" className="text-emerald-400 hover:text-emerald-300 underline">
+                Consultas Referencia
+              </a>
+              .
             </p>
           </div>
           <div className="flex items-center gap-2">
@@ -250,7 +255,7 @@ export default function ReconcileJanuary2026Page(): React.ReactElement {
               variant="outline"
               size="sm"
               className="gap-2"
-              onClick={() => window.open("/reconcile/january-2026", "_blank")}
+              onClick={() => window.open("/reconciliacion/diferencias-fuentes", "_blank")}
             >
               <ExternalLink className="size-4" />
               Nueva ventana
@@ -534,93 +539,20 @@ export default function ReconcileJanuary2026Page(): React.ReactElement {
           </>
         )}
 
-        {/* Siempre visible: investigar una referencia */}
-        <InvestigateReferenciaCard />
+        {/* Enlace a consulta por referencia */}
+        <Card className="border-slate-700/50 bg-slate-900/30">
+          <CardContent className="pt-4">
+            <p className="text-sm text-muted-foreground">
+              Para investigar por qué una referencia aparece como solo CloudWatch, solo Datamapping o mismatch, usa{" "}
+              <a href="/reconciliacion/consultas-referencia" className="text-emerald-400 hover:text-emerald-300 font-medium underline">
+                Consultas Referencia
+              </a>
+              .
+            </p>
+          </CardContent>
+        </Card>
       </div>
     </div>
-  );
-}
-
-function InvestigateReferenciaCard(): React.ReactElement {
-  const [inputValue, setInputValue] = useState("");
-  const [submittedRef, setSubmittedRef] = useState<string | null>(null);
-  const investigation = useQuery(api.queries.investigateReferenciaReconciliation, {
-    referencia: submittedRef ?? "",
-  });
-
-  return (
-    <Card className="border-slate-700/50 bg-slate-900/30">
-      <CardHeader className="pb-2">
-        <CardTitle className="text-base">Investigar referencia</CardTitle>
-        <CardDescription>
-          Ver por qué una referencia aparece como solo CloudWatch, solo
-          Datamapping o mismatch (ej. updatedAt fuera del periodo, precisión
-          numérica).
-        </CardDescription>
-      </CardHeader>
-      <CardContent className="space-y-3">
-        <div className="flex flex-wrap gap-2">
-          <input
-            type="text"
-            placeholder="Ej. 202600450796348666220"
-            value={inputValue}
-            onChange={(e) => setInputValue(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") setSubmittedRef(inputValue.trim() || null);
-            }}
-            className="min-w-[200px] rounded border border-slate-600 bg-slate-800 px-3 py-2 font-mono text-sm"
-          />
-          <Button
-            variant="secondary"
-            size="sm"
-            onClick={() => setSubmittedRef(inputValue.trim() || null)}
-          >
-            Investigar
-          </Button>
-        </div>
-        {investigation !== undefined &&
-          submittedRef !== null &&
-          submittedRef !== "" && (
-          <div className="rounded border border-slate-700/50 bg-slate-800/50 p-4 text-sm space-y-3">
-            <p className="font-medium text-foreground">
-              {investigation.conclusion}</p>
-            {investigation.note != null && (
-              <p className="text-muted-foreground text-xs">{investigation.note}</p>
-            )}
-            {investigation.paymentRecords.length > 0 && (
-              <div>
-                <p className="text-muted-foreground text-xs mb-1">
-                  paymentRecords ({investigation.paymentRecords.length})
-                </p>
-                <ul className="list-disc list-inside text-xs font-mono">
-                  {investigation.paymentRecords.map((r, i) => (
-                    <li key={i}>
-                      ref={r.referencia} monto={r.monto} {r.logSource}{" "}
-                      {r.importMonth} {r.importDate}
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            )}
-            {investigation.datamappingRecords.length > 0 && (
-              <div>
-                <p className="text-muted-foreground text-xs mb-1">
-                  datamappingRecords ({investigation.datamappingRecords.length})
-                </p>
-                <ul className="list-disc list-inside text-xs font-mono">
-                  {investigation.datamappingRecords.map((r, i) => (
-                    <li key={i}>
-                      ref={r.referencia} monto={r.monto} updatedAt={r.updatedAt}{" "}
-                      {r.inJanuary2026 ? "✓ en periodo" : "✗ fuera periodo"}
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            )}
-          </div>
-        )}
-      </CardContent>
-    </Card>
   );
 }
 

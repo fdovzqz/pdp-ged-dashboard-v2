@@ -3,15 +3,14 @@
 import Image from "next/image";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { CalendarDays, BarChart3, GitCompare, FileSearch, Settings } from "lucide-react";
+import { CalendarDays, BarChart3, GitCompare, Settings } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 const NAV_ITEMS = [
   { href: "/", label: "Análisis Mensual", icon: CalendarDays },
   { href: "/anual", label: "Análisis Anual", icon: BarChart3 },
   { href: "/configuracion", label: "Configuración", icon: Settings },
-  { href: "/reconcile/january-2026", label: "Reconciliar", icon: GitCompare },
-  { href: "/reconcile/rfc-referencias", label: "RFC Referencias", icon: FileSearch },
+  { href: "/reconciliacion", label: "Reconciliación", icon: GitCompare },
 ];
 
 export const Nav = (): React.ReactElement => {
@@ -45,7 +44,8 @@ export const Nav = (): React.ReactElement => {
           {NAV_ITEMS.map((item) => {
             const active =
               pathname === item.href ||
-              (item.href === "/configuracion" && pathname.startsWith("/configuracion"));
+              (item.href === "/configuracion" && pathname.startsWith("/configuracion")) ||
+              (item.href === "/reconciliacion" && pathname.startsWith("/reconciliacion"));
             const Icon = item.icon;
             return (
               <Link

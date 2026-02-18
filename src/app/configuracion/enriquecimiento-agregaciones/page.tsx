@@ -120,7 +120,7 @@ export default function EnriquecimientoAgregacionesPage(): React.ReactElement {
             registro. No hace falta ejecutar enriquecimiento ni backfill por
             separado. Búsqueda por RFC en{" "}
             <Link
-              href="/reconcile/rfc-referencias"
+              href="/reconciliacion/consultas-referencia-rfc-placa"
               className="text-emerald-400 hover:text-emerald-300"
             >
               RFC Referencias

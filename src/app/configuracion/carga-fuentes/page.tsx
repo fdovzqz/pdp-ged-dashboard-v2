@@ -2,7 +2,7 @@
 
 import { useState, useCallback, useRef, useEffect } from "react";
 import Link from "next/link";
-import { useAction, useQuery, useConvex } from "convex/react";
+import { useAction, useMutation, useQuery, useConvex } from "convex/react";
 import { api } from "convex/_generated/api";
 import type { Id } from "convex/_generated/dataModel";
 import { Button } from "@/components/ui/button";
@@ -17,11 +17,13 @@ import {
 } from "@/components/ui/dialog";
 import { Loader2, Database, RefreshCw, Trash2 } from "lucide-react";
 import { SyncDialog } from "@/components/dashboard/SyncDialog";
+import { IngestionStatus } from "@/components/dashboard/IngestionStatus";
 import { formatErrorMessage } from "@/lib/formatErrorMessage";
 import {
+  PERIOD_START,
+  PERIOD_END,
   PERIOD_START_DATE,
   PERIOD_END_DATE,
-  PERIOD_END,
   DATAMAPPING_HISTORY_START,
   generateMonthRange,
   generateDateRange,
@@ -32,9 +34,15 @@ const DATAMAPPING_MONTHS = generateMonthRange(
   DATAMAPPING_HISTORY_START.slice(0, 7),
   PERIOD_END
 );
+const ALL_MONTHS = generateMonthRange(PERIOD_START, PERIOD_END);
 const SYNC_STORAGE_KEY = "reconciliation-sync-in-progress";
 
 export default function CargaFuentesPage(): React.ReactElement {
+  const [selectedMonthRegistros, setSelectedMonthRegistros] = useState<string | null>(null);
+  const [registrosDeleteMonthDialogOpen, setRegistrosDeleteMonthDialogOpen] = useState(false);
+  const [registrosDeleteAllDialogOpen, setRegistrosDeleteAllDialogOpen] = useState(false);
+  const [registrosDeleting, setRegistrosDeleting] = useState(false);
+
   const [startDate, setStartDate] = useState(PERIOD_START_DATE);
   const [endDate, setEndDate] = useState(PERIOD_END_DATE);
   const [syncDialogOpen, setSyncDialogOpen] = useState(false);
@@ -143,6 +151,52 @@ export default function CargaFuentesPage(): React.ReactElement {
   );
   const latestFechaTransaccionFullJob = useQuery(
     api.pipelineJobs.getLatestFechaTransaccionFullJob
+  );
+
+  const allMonthsStatus = useQuery(api.queries.getAllMonthsStatus, {});
+  const selectedMonthStats = useQuery(
+    api.queries.getMonthStats,
+    selectedMonthRegistros ? { month: selectedMonthRegistros } : "skip"
+  );
+  const deletePaymentsByMonth = useMutation(api.mutations.deletePaymentsByMonth);
+  const deleteMonthStats = useMutation(api.mutations.deleteMonthStats);
+
+  const handleRegistrosDeleteAll = useCallback(async (): Promise<void> => {
+    setRegistrosDeleting(true);
+    try {
+      for (const month of ALL_MONTHS) {
+        while (true) {
+          const res = await deletePaymentsByMonth({ month });
+          if (res.deleted === 0) break;
+        }
+        await deleteMonthStats({ month });
+      }
+      setRegistrosDeleteAllDialogOpen(false);
+    } catch (err) {
+      console.error(err);
+    } finally {
+      setRegistrosDeleting(false);
+    }
+  }, [deletePaymentsByMonth, deleteMonthStats]);
+
+  const handleRegistrosDeleteMonth = useCallback(
+    async (month: string): Promise<void> => {
+      setRegistrosDeleting(true);
+      try {
+        while (true) {
+          const res = await deletePaymentsByMonth({ month });
+          if (res.deleted === 0) break;
+        }
+        await deleteMonthStats({ month });
+        setRegistrosDeleteMonthDialogOpen(false);
+        setSelectedMonthRegistros(null);
+      } catch (err) {
+        console.error(err);
+      } finally {
+        setRegistrosDeleting(false);
+      }
+    },
+    [deletePaymentsByMonth, deleteMonthStats]
   );
 
   const handleStartSync = useCallback(async (): Promise<void> => {
@@ -490,6 +544,60 @@ export default function CargaFuentesPage(): React.ReactElement {
           </p>
         </div>
 
+        {/* Registros cargados (CloudWatch) */}
+        <div className="glass-card rounded-xl p-6 space-y-4">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <h2 className="text-lg font-semibold">Registros cargados (CloudWatch)</h2>
+            {selectedMonthRegistros && (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setRegistrosDeleteMonthDialogOpen(true)}
+                disabled={registrosDeleting}
+                className="gap-2 bg-white/3 border-border/50 text-red-400 hover:text-red-300"
+              >
+                <Trash2 className="size-3.5" />
+                Borrar mes {selectedMonthRegistros}
+              </Button>
+            )}
+          </div>
+          <p className="text-sm text-muted-foreground">
+            Estado de paymentRecords por mes (sincronizados desde CloudWatch). Borrar mes o todo para volver a cargar.
+          </p>
+          {allMonthsStatus ? (
+            <IngestionStatus
+              allMonthsStatus={allMonthsStatus}
+              selectedMonth={selectedMonthRegistros}
+              selectedMonthDetail={
+                selectedMonthRegistros && selectedMonthStats?.ingestionStatus
+                  ? {
+                      totalRecords: selectedMonthStats.ingestionStatus.totalRecords,
+                      daysWithData: selectedMonthStats.ingestionStatus.daysWithData,
+                      byDate: selectedMonthStats.ingestionStatus.byDate,
+                    }
+                  : undefined
+              }
+              onMonthSelect={setSelectedMonthRegistros}
+            />
+          ) : (
+            <div className="rounded-xl p-5 text-muted-foreground text-sm border border-slate-700/50">
+              Cargando...
+            </div>
+          )}
+          <div>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setRegistrosDeleteAllDialogOpen(true)}
+              disabled={registrosDeleting}
+              className="gap-2 bg-white/3 border-border/50 text-red-400 hover:text-red-300"
+            >
+              <Trash2 className="size-3.5" />
+              Borrar todo (paymentRecords)
+            </Button>
+          </div>
+        </div>
+
         {/* Sincronizar CloudWatch */}
         <div className="glass-card rounded-xl p-6 space-y-4">
           <h2 className="text-lg font-semibold flex items-center gap-2">
@@ -544,7 +652,7 @@ export default function CargaFuentesPage(): React.ReactElement {
             <Database className="size-5" />
             Datamapping (DynamoDB)
             <Link
-              href="/reconcile/january-2026"
+              href="/reconciliacion/diferencias-fuentes"
               className="text-sm font-normal text-emerald-400 hover:text-emerald-300 ml-auto"
             >
               Reconciliar →
@@ -1069,6 +1177,76 @@ export default function CargaFuentesPage(): React.ReactElement {
                 latestDatamappingClearJob?.status === "pending" ||
                 latestDatamappingClearJob?.status === "running"
               }
+              size="sm"
+              className="bg-white/3 border-border/50"
+            >
+              Cancelar
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        open={registrosDeleteMonthDialogOpen}
+        onOpenChange={setRegistrosDeleteMonthDialogOpen}
+      >
+        <DialogContent className="glass-card-elevated border-border/50">
+          <DialogHeader>
+            <DialogTitle>Borrar mes {selectedMonthRegistros}</DialogTitle>
+            <DialogDescription>
+              Se eliminarán todos los registros de paymentRecords y estadísticas de {selectedMonthRegistros}.
+              Los datos se pueden volver a sincronizar desde Sincronizar CloudWatch arriba.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button
+              variant="destructive"
+              onClick={() =>
+                selectedMonthRegistros && handleRegistrosDeleteMonth(selectedMonthRegistros)
+              }
+              disabled={registrosDeleting || !selectedMonthRegistros}
+              size="sm"
+            >
+              {registrosDeleting ? "Eliminando..." : "Eliminar mes"}
+            </Button>
+            <Button
+              variant="outline"
+              onClick={() => setRegistrosDeleteMonthDialogOpen(false)}
+              disabled={registrosDeleting}
+              size="sm"
+              className="bg-white/3 border-border/50"
+            >
+              Cancelar
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        open={registrosDeleteAllDialogOpen}
+        onOpenChange={setRegistrosDeleteAllDialogOpen}
+      >
+        <DialogContent className="glass-card-elevated border-border/50">
+          <DialogHeader>
+            <DialogTitle>Borrar todo (paymentRecords)</DialogTitle>
+            <DialogDescription>
+              Se eliminarán todos los registros de pago y estadísticas de {PERIOD_START} a {PERIOD_END}.
+              Los datos se pueden volver a sincronizar desde Sincronizar CloudWatch arriba.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button
+              variant="destructive"
+              onClick={handleRegistrosDeleteAll}
+              disabled={registrosDeleting}
+              size="sm"
+            >
+              {registrosDeleting ? "Eliminando..." : "Eliminar todo"}
+            </Button>
+            <Button
+              variant="outline"
+              onClick={() => setRegistrosDeleteAllDialogOpen(false)}
+              disabled={registrosDeleting}
               size="sm"
               className="bg-white/3 border-border/50"
             >

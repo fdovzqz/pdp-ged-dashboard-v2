@@ -20,7 +20,6 @@ import {
   getPdfFilename,
   getPdfTitle,
 } from "@/lib/constants";
-import type { DataSource } from "@/lib/types";
 import {
   ContextHeader,
   MonthYearSelector,
@@ -53,8 +52,6 @@ export function DashboardContent(): React.ReactElement {
   const [calendarMode, setCalendarMode] = useState<CalendarMode>("events");
   const [showYearComparison, setShowYearComparison] = useState(false);
 
-  const dataSource: DataSource =
-    searchParams.get("source") === "cloudwatch" ? "cloudwatch" : "datamapping";
   const monthKeyFromUrl = searchParams.get("month") ?? ANALYSIS_MONTH_STRING;
   const { year: selectedYear, month: selectedMonth } = parseMonthKey(monthKeyFromUrl);
 
@@ -74,14 +71,7 @@ export function DashboardContent(): React.ReactElement {
     []
   );
 
-  const handleSourceChange = useCallback((source: DataSource) => {
-    const url = new URL(window.location.href);
-    url.searchParams.set("source", source);
-    window.history.replaceState({}, "", url.toString());
-    window.location.href = url.toString();
-  }, []);
-
-  const januaryApi = dataSource === "datamapping" ? api.januaryQueriesDatamapping : api.januaryQueries;
+  const januaryApi = api.januaryQueriesDatamapping;
 
   const monthLabel = getMonthLabel(selectedYear, selectedMonth);
   const yearKey = String(selectedYear);
@@ -288,37 +278,10 @@ export function DashboardContent(): React.ReactElement {
           monthShortName={getMonthShortName(selectedMonth)}
           selectedYear={selectedYear}
           monthSelector={
-            <div className="flex flex-wrap items-center gap-3">
-              <div className="flex rounded-lg border border-slate-700/50 overflow-hidden bg-slate-800/40">
-                <button
-                  type="button"
-                  onClick={() => handleSourceChange("cloudwatch")}
-                  className={`px-3 py-1.5 text-xs font-medium transition-colors ${
-                    dataSource === "cloudwatch"
-                      ? "bg-emerald-500/30 text-emerald-400"
-                      : "text-slate-400 hover:text-slate-200"
-                  }`}
-                >
-                  CloudWatch
-                </button>
-                <button
-                  type="button"
-                  onClick={() => handleSourceChange("datamapping")}
-                  className={`px-3 py-1.5 text-xs font-medium transition-colors ${
-                    dataSource === "datamapping"
-                      ? "bg-amber-500/30 text-amber-400"
-                      : "text-slate-400 hover:text-slate-200"
-                  }`}
-                >
-                  DataMapping
-                </button>
-              </div>
-              <MonthYearSelector
-                value={monthKey}
-                onChange={handleMonthChange}
-                dataSource={dataSource}
-              />
-            </div>
+            <MonthYearSelector
+              value={monthKey}
+              onChange={handleMonthChange}
+            />
           }
         />
 

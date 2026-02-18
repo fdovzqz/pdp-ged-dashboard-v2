@@ -25,6 +25,8 @@ const nextConfig: NextConfig = {
     return [
       { source: "/upload", destination: "/configuracion/datos", permanent: true },
       { source: "/jobs", destination: "/configuracion/status", permanent: true },
+      { source: "/reconcile/january-2026", destination: "/reconciliacion/diferencias-fuentes", permanent: true },
+      { source: "/reconcile/rfc-referencias", destination: "/reconciliacion/consultas-referencia-rfc-placa", permanent: true },
     ];
   },
   ...(convexUrl && {

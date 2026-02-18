@@ -1,10 +1,8 @@
 "use client";
 
-import { useMemo, useCallback } from "react";
-import { useSearchParams } from "next/navigation";
+import { useMemo } from "react";
 import { useQuery } from "convex/react";
 import { api } from "convex/_generated/api";
-import type { DataSource } from "@/lib/types";
 import { motion } from "framer-motion";
 import {
   CreditCard,
@@ -60,14 +58,7 @@ const formatCompact = (n: number): string => {
 };
 
 export function AnnualDashboard(): React.ReactElement {
-  const searchParams = useSearchParams();
-  const dataSource: DataSource =
-    searchParams.get("source") === "cloudwatch" ? "cloudwatch" : "datamapping";
-
-  const annualApi =
-    dataSource === "datamapping"
-      ? api.annualQueriesDatamapping
-      : api.annualQueries;
+  const annualApi = api.annualQueriesDatamapping;
 
   const monthlyBreakdown = useQuery(annualApi.getMonthlyBreakdown);
   const annualKPIs = useQuery(annualApi.getAnnualKPIs);
@@ -77,13 +68,6 @@ export function AnnualDashboard(): React.ReactElement {
   const annualPaymentBySource = useQuery(
     api.annualQueriesDatamapping.getAnnualPaymentBySource
   );
-
-  const handleSourceChange = useCallback((source: DataSource) => {
-    const url = new URL(window.location.href);
-    url.searchParams.set("source", source);
-    window.history.replaceState({}, "", url.toString());
-    window.location.href = url.toString();
-  }, []);
 
   const chartData = useMemo(() => {
     if (!monthlyBreakdown) return [];
@@ -181,30 +165,6 @@ export function AnnualDashboard(): React.ReactElement {
                 Datos disponibles: Ene–Dic 2024, Ene–Dic 2025, Ene–Feb 2026.
               </p>
               <div className="flex flex-wrap items-center gap-3 mt-3">
-                <div className="flex rounded-lg border border-slate-700/50 overflow-hidden bg-slate-800/40">
-                  <button
-                    type="button"
-                    onClick={() => handleSourceChange("cloudwatch")}
-                    className={`px-3 py-1.5 text-xs font-medium transition-colors ${
-                      dataSource === "cloudwatch"
-                        ? "bg-emerald-500/30 text-emerald-400"
-                        : "text-slate-400 hover:text-slate-200"
-                    }`}
-                  >
-                    CloudWatch
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => handleSourceChange("datamapping")}
-                    className={`px-3 py-1.5 text-xs font-medium transition-colors ${
-                      dataSource === "datamapping"
-                        ? "bg-amber-500/30 text-amber-400"
-                        : "text-slate-400 hover:text-slate-200"
-                    }`}
-                  >
-                    DataMapping
-                  </button>
-                </div>
                 {(["2024", "2025", "2026"] as const).map((y) => (
                   <span
                     key={y}
@@ -531,10 +491,8 @@ export function AnnualDashboard(): React.ReactElement {
           </div>
         </motion.div>
 
-        {/* ── Pagos por tipo de fuente (solo DataMapping) ── */}
-        {dataSource === "datamapping" && (
-          <AnnualPaymentBySourceSection data={annualPaymentBySource} />
-        )}
+        {/* ── Pagos por tipo de fuente (DataMapping) ── */}
+        <AnnualPaymentBySourceSection data={annualPaymentBySource} />
 
         {/* ── Cumulative Charts ── */}
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
