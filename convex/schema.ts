@@ -293,6 +293,8 @@ export default defineSchema({
     status: v.optional(v.string()),
     /** Fecha de transacción desde paymentRecords (por referencia); fallback a updatedAt si no existe en CloudWatch. Usada para agregaciones y tableros. */
     fechaTransaccion: v.optional(v.string()),
+    /** YYYY-MM-DD en hora México (UTC-6), derivado de fechaTransaccion. Índice para filtrar por mes en tableros. */
+    fechaTransaccionMexico: v.optional(v.string()),
   })
     .index("by_transactionId", ["transactionId"])
     .index("by_referencia", ["referencia"])
@@ -301,7 +303,8 @@ export default defineSchema({
     .index("by_tipoMovimiento_updatedAt", ["tipoMovimiento", "updatedAt"])
     .index("by_enrichmentExtracted_updatedAt", ["enrichmentExtracted", "updatedAt"])
     .index("by_status_updatedAt", ["status", "updatedAt"])
-    .index("by_status_fechaTransaccion", ["status", "fechaTransaccion"]),
+    .index("by_status_fechaTransaccion", ["status", "fechaTransaccion"])
+    .index("by_status_fechaTransaccionMexico", ["status", "fechaTransaccionMexico"]),
 
   /** Control de procesamiento ETL. */
   processingControl: defineTable({

@@ -636,7 +636,7 @@ export const getFechaTransaccionForReferencias = query({
  * Página de datamappingRecords filtrada por mes (updatedAt o fechaTransaccion en rango) y solo status = PAGO VALIDADO.
  * Usado por buildDatamappingAggregates para ETL; los tableros mensual y anual solo usan pagos validados.
  * Registros sin status (carga antigua) no se incluyen hasta que tengan status enriquecido/backfill.
- * useFechaTransaccion: si true, filtra por fechaTransaccion; si false/undefined, por updatedAt (compatibilidad).
+ * useFechaTransaccion: si true, filtra por fechaTransaccion en hora México (UTC-6) vía fechaTransaccionMexico.
  */
 export const getDatamappingRecordsByMonthPaginated = query({
   args: {
@@ -654,11 +654,11 @@ export const getDatamappingRecordsByMonthPaginated = query({
     if (useFechaTransaccion) {
       const result = await ctx.db
         .query("datamappingRecords")
-        .withIndex("by_status_fechaTransaccion", (q) =>
+        .withIndex("by_status_fechaTransaccionMexico", (q) =>
           q
             .eq("status", PAGO_VALIDADO_STATUS)
-            .gte("fechaTransaccion", start)
-            .lt("fechaTransaccion", end)
+            .gte("fechaTransaccionMexico", start)
+            .lt("fechaTransaccionMexico", end)
         )
         .order("asc")
         .paginate(safeOpts);
@@ -1140,6 +1140,39 @@ export const getDatamappingPageIdForBackfillByRange = query({
       .paginate({ numItems, cursor });
     return {
       page: result.page.map((r) => ({ _id: r._id })),
+      isDone: result.isDone,
+      continueCursor: result.continueCursor,
+    };
+  },
+});
+
+/**
+ * Página de datamappingRecords con _id y fechaTransaccion (status PAGO VALIDADO).
+ * Para backfill de fechaTransaccionMexico: establecer fechaTransaccionMexico en hora México (UTC-6).
+ */
+export const getDatamappingPageForFechaTransaccionMexicoBackfill = query({
+  args: {
+    fechaTransaccionFrom: v.string(),
+    fechaTransaccionTo: v.string(),
+    cursor: v.union(v.string(), v.null()),
+    numItems: v.optional(v.number()),
+  },
+  handler: async (ctx, { fechaTransaccionFrom, fechaTransaccionTo, cursor, numItems = 500 }) => {
+    const result = await ctx.db
+      .query("datamappingRecords")
+      .withIndex("by_status_fechaTransaccion", (q) =>
+        q
+          .eq("status", PAGO_VALIDADO_STATUS)
+          .gte("fechaTransaccion", fechaTransaccionFrom)
+          .lt("fechaTransaccion", fechaTransaccionTo)
+      )
+      .order("asc")
+      .paginate({ numItems, cursor });
+    return {
+      page: result.page.map((r) => ({
+        _id: r._id,
+        fechaTransaccion: r.fechaTransaccion ?? "",
+      })),
       isDone: result.isDone,
       continueCursor: result.continueCursor,
     };

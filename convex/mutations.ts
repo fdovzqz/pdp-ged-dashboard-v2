@@ -1,6 +1,9 @@
 import { mutation } from "./_generated/server";
 import { v } from "convex/values";
-import { timestampToMexicoDate } from "./lib/mexicoDate";
+import {
+  timestampToMexicoDate,
+  fechaTransaccionToMexicoDate,
+} from "./lib/mexicoDate";
 import {
   getMovementConfig,
   normalizeWithConfig,
@@ -599,8 +602,9 @@ export const patchDatamappingRfcBatch = mutation({
 });
 
 /**
- * Actualiza fechaTransaccion en datamappingRecords.
+ * Actualiza fechaTransaccion en datamappingRecords (y fechaTransaccionMexico en hora México UTC-6).
  * Usado por backfill que obtiene fechaTransaccion desde paymentRecords (por referencia) o usa updatedAt como fallback.
+ * Tableros y agregados usan siempre fechaTransaccion interpretada en zona México.
  */
 export const patchDatamappingFechaTransaccionBatch = mutation({
   args: {
@@ -613,7 +617,32 @@ export const patchDatamappingFechaTransaccionBatch = mutation({
   },
   handler: async (ctx, { updates }) => {
     for (const { id, fechaTransaccion } of updates) {
-      await ctx.db.patch(id, { fechaTransaccion });
+      const fechaTransaccionMexico = fechaTransaccionToMexicoDate(fechaTransaccion);
+      await ctx.db.patch(id, {
+        fechaTransaccion,
+        ...(fechaTransaccionMexico ? { fechaTransaccionMexico } : {}),
+      });
+    }
+    return { patched: updates.length };
+  },
+});
+
+/**
+ * Backfill: actualiza solo fechaTransaccionMexico (hora México UTC-6) a partir de fechaTransaccion.
+ * Para registros que ya tienen fechaTransaccion pero no fechaTransaccionMexico.
+ */
+export const patchDatamappingFechaTransaccionMexicoBatch = mutation({
+  args: {
+    updates: v.array(
+      v.object({
+        id: v.id("datamappingRecords"),
+        fechaTransaccionMexico: v.string(),
+      })
+    ),
+  },
+  handler: async (ctx, { updates }) => {
+    for (const { id, fechaTransaccionMexico } of updates) {
+      await ctx.db.patch(id, { fechaTransaccionMexico });
     }
     return { patched: updates.length };
   },

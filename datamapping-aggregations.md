@@ -7,7 +7,7 @@ Permite visualizar **Análisis Mensual** y **Análisis Anual** usando exclusivam
 | Aspecto | CloudWatch | DataMapping |
 |---------|------------|-------------|
 | Origen | `paymentRecords` (logs Step Functions) | `datamappingRecords` (DynamoDB PAGO VALIDADO) |
-| Fecha de referencia | `timestamp` / `fechaTransaccion` | `updatedAt` (día y hora exacta) |
+| Fecha de referencia | `timestamp` / `fechaTransaccion` | **`fechaTransaccion`** (si existe; fallback `updatedAt`). Siempre en **hora México (UTC-6)**. |
 | Movimiento | `movimiento` | `tipoMovimiento` |
 | Canales | v1, v2, payment | `fuente`: EVO = Tarjeta de Crédito; DEC y otros = Transferencia |
 
@@ -57,7 +57,7 @@ En la misma sección, subsección "Agregaciones DataMapping":
 
 - Seleccionar los meses a procesar (p. ej. 2024-01, 2025-01, 2026-01).
 - Clic en "Generar tablas agregadas (DataMapping)".
-- La action `buildDatamappingAggregates` lee `datamappingRecords` **solo con `status = "PAGO VALIDADO"`** (índice `by_status_updatedAt`), agrupa por día/hora exacta de `updatedAt` y escribe en las tablas `*Datamapping`. Los registros sin `status` (carga antigua) no entran en los tableros hasta que se re-carguen o se haga backfill de `status`.
+- La action `buildDatamappingAggregates` lee `datamappingRecords` **solo con `status = "PAGO VALIDADO"`** filtrando por mes en **hora México (UTC-6)** mediante el campo `fechaTransaccionMexico` (índice `by_status_fechaTransaccionMexico`). Agrupa por día/hora usando **`fechaTransaccion`** interpretada en zona México y escribe en las tablas `*Datamapping`. Los registros sin `status` (carga antigua) no entran hasta que se re-carguen o se haga backfill de `status`. Para que los registros existentes con `fechaTransaccion` aparezcan en los tableros, ejecutar una vez la action `backfillFechaTransaccionMexicoForDatamapping` tras desplegar.
 
 ### 3. Ver los dashboards con fuente DataMapping
 
@@ -94,3 +94,5 @@ En **Análisis Mensual** (`/`) o **Análisis Anual** (`/anual`):
 4. **Deduplicación**: Se cuentan todos los registros de datamapping; cada fila PAGO VALIDADO representa un pago. No hay deduplicación por referencia.
 
 5. **Límite de tiempo**: `buildDatamappingAggregates` tiene un límite de ~550 s; para meses muy grandes puede ser necesario procesar por lotes.
+
+6. **Zona horaria México (UTC-6)**: Todos los tableros y agregados DataMapping usan de forma consistente la **fecha de transacción en hora México**: 00:00 México = 06:00 UTC. El campo `fechaTransaccionMexico` (YYYY-MM-DD) se deriva de `fechaTransaccion` y se usa para filtrar por mes; el ETL interpreta `fechaTransaccion` con `convex/lib/mexicoDate.ts` (UTC → México si hay Z/offset; si no hay zona se asume ya México).

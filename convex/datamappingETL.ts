@@ -127,6 +127,7 @@ export const buildDatamappingAggregates = action({
       const dailyFuenteMap = new Map<string, Map<string, { count: number; monto: number }>>();
 
       for (const r of records) {
+        // Tableros DataMapping usan siempre fechaTransaccion en hora México (UTC-6).
         const dateStr = r.fechaTransaccion ?? r.updatedAt ?? "";
         const parts = datamappingUpdatedAtToParts(dateStr);
         if (!parts || parts.month !== month || parts.year !== year) continue;

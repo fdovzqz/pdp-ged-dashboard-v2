@@ -20,7 +20,7 @@ function sanitizeConvexError(err: unknown): Error {
     msg.toLowerCase().includes("function_invocation_timeout")
   ) {
     return new Error(
-      "Timeout de Vercel (5 min). El step procesó demasiados datos; los rangos de 7 días evitan este error."
+      "Timeout de Vercel (5 min). El step procesó demasiados datos; los rangos de 5 días evitan este error."
     );
   }
   if (
@@ -77,9 +77,9 @@ const DATAMAPPING_MONTHS = generateMonthRange(
 
 /**
  * Días por step para no superar el timeout de Vercel (5 min por invocación).
- * Un step por rango de ~7 días evita FUNCTION_INVOCATION_TIMEOUT en meses pesados.
+ * Un step por rango de 5 días evita FUNCTION_INVOCATION_TIMEOUT en meses pesados.
  */
-const DAYS_PER_STEP = 7;
+const DAYS_PER_STEP = 5;
 
 function getDaysInMonth(year: number, month: number): number {
   return new Date(year, month, 0).getDate();
@@ -140,7 +140,7 @@ type MonthResultFailed = {
 type MonthResult = MonthResultOk | MonthResultFailed;
 
 /**
- * Extrae toda la historia de datamapping por rangos de días (p. ej. 7 días por step).
+ * Extrae toda la historia de datamapping por rangos de días (5 días por step).
  * Cada step procesa solo un rango de días para no superar el timeout de Vercel (5 min).
  * Los steps se ejecutan en paralelo; al final se agregan resultados por mes.
  */

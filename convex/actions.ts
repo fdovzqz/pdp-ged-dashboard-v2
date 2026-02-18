@@ -42,7 +42,10 @@ import {
   extractRfcFromRawJson,
   extractEnrichmentFieldsFromRawJson,
 } from "./lib/dynamodb";
-import { timestampToMexicoMonth } from "./lib/mexicoDate";
+import {
+  timestampToMexicoMonth,
+  fechaTransaccionToMexicoDate,
+} from "./lib/mexicoDate";
 
 const LOG_GROUPS = {
   v1: process.env.CLOUDWATCH_LOG_GROUP_V1!,
@@ -1247,6 +1250,85 @@ export const backfillFechaTransaccionForDatamapping = action({
       const message = err instanceof Error ? err.message : String(err);
       throw new Error(`Backfill fechaTransaccion (desde ${sinceDate}): ${message}`);
     }
+  },
+});
+
+/** Rango amplio para backfill fechaTransaccionMexico (registros con fechaTransaccion). */
+const FECHA_TRANSACCION_MEXICO_BACKFILL_RANGE = {
+  from: "2020-01-01",
+  to: "2030-01-01",
+};
+
+/**
+ * Backfill fechaTransaccionMexico: establece fechaTransaccionMexico (YYYY-MM-DD hora México UTC-6)
+ * a partir de fechaTransaccion para todos los registros PAGO VALIDADO que tengan fechaTransaccion.
+ * Ejecutar una vez tras desplegar el índice by_status_fechaTransaccionMexico para que los tableros
+ * y agregados DataMapping filtren por mes en hora México de forma consistente.
+ */
+export const backfillFechaTransaccionMexicoForDatamapping = action({
+  args: {
+    continueState: v.optional(
+      v.object({
+        cursor: v.union(v.string(), v.null()),
+      })
+    ),
+    maxDurationMs: v.optional(v.number()),
+  },
+  handler: async (ctx, { continueState, maxDurationMs: maxMs }) => {
+    const limitMs = maxMs ?? 90_000;
+    const startMs = Date.now();
+    type Id = import("./_generated/dataModel").Id<"datamappingRecords">;
+    let cursor: string | null = continueState?.cursor ?? null;
+    let processed = 0;
+    let patched = 0;
+
+    const { from, to } = FECHA_TRANSACCION_MEXICO_BACKFILL_RANGE;
+    do {
+      if (Date.now() - startMs > limitMs) {
+        return {
+          processed,
+          patched,
+          isDone: false,
+          continueState: { cursor },
+          timedOut: true,
+        };
+      }
+
+      const result = (await ctx.runQuery(
+        api.queries.getDatamappingPageForFechaTransaccionMexicoBackfill,
+        { fechaTransaccionFrom: from, fechaTransaccionTo: to, cursor, numItems: 400 }
+      )) as {
+        page: Array<{ _id: Id; fechaTransaccion: string }>;
+        isDone: boolean;
+        continueCursor: string | null;
+      };
+
+      const updates: Array<{ id: Id; fechaTransaccionMexico: string }> = [];
+      for (const r of result.page) {
+        processed += 1;
+        const fechaTransaccionMexico = fechaTransaccionToMexicoDate(r.fechaTransaccion);
+        if (fechaTransaccionMexico) {
+          updates.push({ id: r._id, fechaTransaccionMexico });
+        }
+      }
+
+      if (updates.length > 0) {
+        await ctx.runMutation(api.mutations.patchDatamappingFechaTransaccionMexicoBatch, {
+          updates,
+        });
+        patched += updates.length;
+      }
+
+      cursor = result.continueCursor;
+      if (result.isDone) break;
+    } while (cursor);
+
+    return {
+      processed,
+      patched,
+      isDone: true,
+      continueState: undefined,
+    };
   },
 });
 

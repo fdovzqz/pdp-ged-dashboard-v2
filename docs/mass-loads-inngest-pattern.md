@@ -26,7 +26,7 @@ Este documento describe la **manera estándar** de hacer cargas masivas (y opera
 
 - Dentro de cada step, si una unidad puede ser muy grande (p. ej. un mes con 30k registros), **no** hacer una sola llamada HTTP larga a Convex.
 - Procesar por **chunks** (p. ej. una página DynamoDB por request): muchas llamadas cortas (`fetchDatamappingForDayChunk` en bucle hasta `hasMore === false`). Así cada request termina en &lt; ~90s y se evitan 524/600s.
-- **En producción (Vercel)**: cada invocación de Inngest tiene un límite de **5 minutos** (300s). Si un step procesa un mes entero y tarda más, Vercel devuelve `FUNCTION_INVOCATION_TIMEOUT`. Por eso en `datamapping-full-history` cada mes se subdivide en **rangos de 7 días** (un step por rango); así cada step queda por debajo del límite y los meses más pesados completan sin timeout.
+- **En producción (Vercel)**: cada invocación de Inngest tiene un límite de **5 minutos** (300s). Si un step procesa un mes entero y tarda más, Vercel devuelve `FUNCTION_INVOCATION_TIMEOUT`. Por eso en `datamapping-full-history` cada mes se subdivide en **rangos de 5 días** (un step por rango); así cada step queda por debajo del límite y los meses más pesados completan sin timeout.
 
 ### 3. Ejecución en paralelo
 
@@ -54,9 +54,9 @@ Este documento describe la **manera estándar** de hacer cargas masivas (y opera
 ## Ejemplo implementado: histórico completo datamapping
 
 - **Función**: `datamapping-full-history` ([src/inngest/datamapping-full-history.ts](../src/inngest/datamapping-full-history.ts)).
-- **Unidades**: 26 meses (2024-01 … 2026-02), subdivididos en rangos de 7 días para no superar el timeout de Vercel (5 min por invocación).
-- **Steps**: `extraer-2024-01-dias-1-7`, `extraer-2024-01-dias-8-14`, …, uno por rango, en paralelo vía `Promise.all(rangePromises)`.
-- **Dentro de cada step**: solo los días del rango (p. ej. 1–7); por cada día, bucle de `fetchDatamappingForDayChunk` hasta `hasMore === false` (chunks para evitar 524/600s). Al final se agregan resultados por mes.
+- **Unidades**: 26 meses (2024-01 … 2026-02), subdivididos en rangos de 5 días para no superar el timeout de Vercel (5 min por invocación).
+- **Steps**: `extraer-2024-01-dias-1-5`, `extraer-2024-01-dias-6-10`, …, uno por rango de 5 días, en paralelo vía `Promise.all(rangePromises)`.
+- **Dentro de cada step**: solo los días del rango (p. ej. 1–5); por cada día, bucle de `fetchDatamappingForDayChunk` hasta `hasMore === false` (chunks para evitar 524/600s). Al final se agregan resultados por mes.
 - **Resultado**: `Promise.allSettled` → `completedMonths`, `failedMonths`, `byMonth`, `summary`; se persiste en `pipelineJobs.result` y, si hay fallos, en `errorMessage`.
 - **Runbook**: [datamapping-full-history-runbook.md](datamapping-full-history-runbook.md).
 - **Rendimiento**: carga completa (todos los meses, con enriquecimiento en la carga) en ~20 minutos en entorno dev; ver runbook sección "Rendimiento observado".
