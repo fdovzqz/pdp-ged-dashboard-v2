@@ -152,4 +152,5 @@ El mismo patrón se aplica a enriquecimientos, agregaciones y reconciliaciones. 
 - [datamapping-aggregations.md](datamapping-aggregations.md) – Análisis Mensual y Anual desde DataMapping (tablas agregadas)
 - [docs/jobs-page.md](docs/jobs-page.md) – Página Jobs: centralización de pipelines (sync CloudWatch, carga DynamoDB, agregados, enriquecimiento RFC, backfill)
 - [docs/inngest-setup.md](docs/inngest-setup.md) – Configuración básica de Inngest
+- [docs/production-setup.md](docs/production-setup.md) – **Puesta en producción**: Vercel, Convex (prod) e Inngest
 - [convex/README.md](convex/README.md) – Funciones Convex del proyecto
