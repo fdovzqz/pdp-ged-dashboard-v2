@@ -26,7 +26,7 @@ Este documento describe la **manera estándar** de hacer cargas masivas (y opera
 
 - Dentro de cada step, si una unidad puede ser muy grande (p. ej. un mes con 30k registros), **no** hacer una sola llamada HTTP larga a Convex.
 - Procesar por **chunks** (p. ej. una página DynamoDB por request): muchas llamadas cortas (`fetchDatamappingForDayChunk` en bucle hasta `hasMore === false`). Así cada request termina en &lt; ~90s y se evitan 524/600s.
-- **En producción (Vercel)**: cada invocación de Inngest tiene un límite de **5 minutos** (300s). Si un step procesa un mes entero y tarda más, Vercel devuelve `FUNCTION_INVOCATION_TIMEOUT`. Por eso en `datamapping-full-history` cada mes se subdivide en **rangos de 5 días** (un step por rango); así cada step queda por debajo del límite y los meses más pesados completan sin timeout.
+- **En producción (Vercel)**: cada invocación de Inngest tiene un límite de **5 minutos** (300s). Si un step procesa un mes entero y tarda más, Vercel devuelve `FUNCTION_INVOCATION_TIMEOUT`. Por eso en `datamapping-full-history` cada mes se subdivide en **rangos de 3 días** (un step por rango); así cada step queda por debajo del límite incluso en meses muy pesados (p. ej. mayo 2024). Más steps = más invocaciones; aceptable para runs ocasionales.
 
 ### 3. Ejecución en paralelo
 
@@ -54,9 +54,9 @@ Este documento describe la **manera estándar** de hacer cargas masivas (y opera
 ## Ejemplo implementado: histórico completo datamapping
 
 - **Función**: `datamapping-full-history` ([src/inngest/datamapping-full-history.ts](../src/inngest/datamapping-full-history.ts)).
-- **Unidades**: 26 meses (2024-01 … 2026-02), subdivididos en rangos de 5 días para no superar el timeout de Vercel (5 min por invocación).
-- **Steps**: `extraer-2024-01-dias-1-5`, `extraer-2024-01-dias-6-10`, …, uno por rango de 5 días, en paralelo vía `Promise.all(rangePromises)`.
-- **Dentro de cada step**: solo los días del rango (p. ej. 1–5); por cada día, bucle de `fetchDatamappingForDayChunk` hasta `hasMore === false` (chunks para evitar 524/600s). Al final se agregan resultados por mes.
+- **Unidades**: 26 meses (2024-01 … 2026-02), subdivididos en rangos de 3 días para no superar el timeout de Vercel (5 min por invocación).
+- **Steps**: `extraer-2024-01-dias-1-3`, `extraer-2024-01-dias-4-6`, …, uno por rango de 3 días, en paralelo vía `Promise.all(rangePromises)`.
+- **Dentro de cada step**: solo los días del rango (p. ej. 1–3); por cada día, bucle de `fetchDatamappingForDayChunk` hasta `hasMore === false` (chunks para evitar 524/600s). Al final se agregan resultados por mes.
 - **Resultado**: `Promise.allSettled` → `completedMonths`, `failedMonths`, `byMonth`, `summary`; se persiste en `pipelineJobs.result` y, si hay fallos, en `errorMessage`.
 - **Runbook**: [datamapping-full-history-runbook.md](datamapping-full-history-runbook.md).
 - **Rendimiento**: carga completa (todos los meses, con enriquecimiento en la carga) en ~20 minutos en entorno dev; ver runbook sección "Rendimiento observado".
@@ -82,6 +82,20 @@ En todos los casos: estado y resultado en `pipelineJobs`, y en Inngest Runs se v
 - Steps en **paralelo**: varias barras verdes solapadas en el tiempo.
 - **Reintentos**: al expandir un step que falló al inicio, se ven “Attempt 0” (rojo), “Attempt 1” (rojo o verde), “Attempt 2” (verde si el reintento lo solucionó). Así se distingue “completado tras reintento” de “falló tras todos los reintentos”.
 - **actualizar-watermark-y-completar** (o equivalente): step final que escribe resultado en Convex; solo corre cuando todos los steps anteriores terminaron (con éxito o rechazo tras reintentos, gracias a `allSettled`).
+
+---
+
+## Alternativa: ejecución sin límite de 5 min de Vercel
+
+Si no quieres depender del límite de 5 min de Vercel (más steps = más invocaciones), hay dos opciones:
+
+1. **Servir Inngest desde otro host con timeout mayor**  
+   Desplegar el endpoint que usa `serve()` (p. ej. `/api/inngest`) en una plataforma que permita funciones de 10–15 min (Railway, Fly.io, un VPS, etc.). En el dashboard de Inngest, apuntar la URL de la app a ese despliegue en lugar de Vercel. Así cada step puede esperar hasta ~10 min la respuesta de una action de Convex (Convex permite **10 min** por action). Podrías usar rangos de 7–10 días por step y menos invocaciones totales.
+
+2. **Orquestación en Convex**  
+   En lugar de que Inngest ejecute el bucle (steps que llaman a Convex), un solo evento Inngest podría crear un job en Convex; un cron o scheduler en Convex iría procesando rangos (cada uno en una action de hasta 10 min) y actualizando el `pipelineJob`. Inngest solo dispara “inicio”; el trabajo pesado corre 100% en Convex. Implica más cambios de arquitectura (colas en Convex, reporte de progreso, etc.).
+
+Para la mayoría de casos, **rangos de 3 días** en Vercel son suficientes y evitan tener que tocar la arquitectura.
 
 ---
 
