@@ -3,14 +3,13 @@
 import Image from "next/image";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { CalendarDays, Upload, BarChart3, GitCompare, FileSearch, ListTodo } from "lucide-react";
+import { CalendarDays, BarChart3, GitCompare, FileSearch, Settings } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 const NAV_ITEMS = [
   { href: "/", label: "Análisis Mensual", icon: CalendarDays },
   { href: "/anual", label: "Análisis Anual", icon: BarChart3 },
-  { href: "/upload", label: "Datos", icon: Upload },
-  { href: "/jobs", label: "Jobs", icon: ListTodo },
+  { href: "/configuracion", label: "Configuración", icon: Settings },
   { href: "/reconcile/january-2026", label: "Reconciliar", icon: GitCompare },
   { href: "/reconcile/rfc-referencias", label: "RFC Referencias", icon: FileSearch },
 ];
@@ -44,7 +43,9 @@ export const Nav = (): React.ReactElement => {
 
           {/* Nav items */}
           {NAV_ITEMS.map((item) => {
-            const active = pathname === item.href;
+            const active =
+              pathname === item.href ||
+              (item.href === "/configuracion" && pathname.startsWith("/configuracion"));
             const Icon = item.icon;
             return (
               <Link

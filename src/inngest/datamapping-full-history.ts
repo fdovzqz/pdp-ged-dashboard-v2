@@ -11,10 +11,18 @@ function getConvexUrl(): string {
   return url;
 }
 
-/** Sanitiza mensajes de error que son HTML (Cloudflare 500/524). */
+/** Sanitiza mensajes de error (HTML Cloudflare 500/524 o FUNCTION_INVOCATION_TIMEOUT de Vercel). */
 function sanitizeConvexError(err: unknown): Error {
   const msg =
     err instanceof Error ? err.message : typeof err === "string" ? err : String(err);
+  if (
+    msg.includes("FUNCTION_INVOCATION_TIMEOUT") ||
+    msg.toLowerCase().includes("function_invocation_timeout")
+  ) {
+    return new Error(
+      "Timeout de Vercel (5 min). El step procesó demasiados datos; los rangos de 7 días evitan este error."
+    );
+  }
   if (
     msg.startsWith("<") ||
     msg.includes("<!DOCTYPE") ||
@@ -67,10 +75,54 @@ const DATAMAPPING_MONTHS = generateMonthRange(
   PERIOD_END
 );
 
+/**
+ * Días por step para no superar el timeout de Vercel (5 min por invocación).
+ * Un step por rango de ~7 días evita FUNCTION_INVOCATION_TIMEOUT en meses pesados.
+ */
+const DAYS_PER_STEP = 7;
+
 function getDaysInMonth(year: number, month: number): number {
   return new Date(year, month, 0).getDate();
 }
 
+/** Rango de días a procesar en un solo step (evita timeout en meses grandes). */
+type RangeTask = { ym: string; startDay: number; endDay: number };
+
+function getMonthRanges(ym: string): RangeTask[] {
+  const [y, m] = ym.split("-").map(Number);
+  const lastDay = getDaysInMonth(y, m);
+  const ranges: RangeTask[] = [];
+  for (let start = 1; start <= lastDay; start += DAYS_PER_STEP) {
+    const end = Math.min(start + DAYS_PER_STEP - 1, lastDay);
+    ranges.push({ ym, startDay: start, endDay: end });
+  }
+  return ranges;
+}
+
+/** Todas las tareas: un step por rango de días (varios por mes). */
+const ALL_RANGE_TASKS = DATAMAPPING_MONTHS.flatMap(getMonthRanges);
+
+type RangeResultOk = {
+  ym: string;
+  startDay: number;
+  endDay: number;
+  status: "completed";
+  inserted: number;
+  updated: number;
+  maxUpdatedAt: string | null;
+};
+
+type RangeResultFailed = {
+  ym: string;
+  startDay: number;
+  endDay: number;
+  status: "failed";
+  error: string;
+};
+
+type RangeResult = RangeResultOk | RangeResultFailed;
+
+/** Resultado agregado por mes (para byMonth y completedMonths / failedMonths). */
 type MonthResultOk = {
   ym: string;
   status: "completed";
@@ -88,10 +140,9 @@ type MonthResultFailed = {
 type MonthResult = MonthResultOk | MonthResultFailed;
 
 /**
- * Extrae toda la historia de datamapping (por día, dentro de cada mes).
- * Los 26 meses se ejecutan en paralelo (un step por mes). Si un mes falla, solo ese step se reintenta.
- * Al final el resultado indica: completedMonths (ok), failedMonths (fallaron tras reintentos) para enfocarse en esos.
- * Cada día se procesa por chunks para evitar timeout 524/600s.
+ * Extrae toda la historia de datamapping por rangos de días (p. ej. 7 días por step).
+ * Cada step procesa solo un rango de días para no superar el timeout de Vercel (5 min).
+ * Los steps se ejecutan en paralelo; al final se agregan resultados por mes.
  */
 export const datamappingFullHistory = inngest.createFunction(
   {
@@ -123,66 +174,70 @@ export const datamappingFullHistory = inngest.createFunction(
           current: 0,
           total: DATAMAPPING_MONTHS.length,
           unit: "months",
-          message: "Procesando 26 meses en paralelo...",
+          message: `Procesando ${ALL_RANGE_TASKS.length} rangos (${DAYS_PER_STEP} días/step) en paralelo...`,
         },
       });
       return { ok: true };
     });
 
-    const monthPromises = DATAMAPPING_MONTHS.map((ym) =>
-      step.run(`extraer-mes-${ym}`, async (): Promise<MonthResultOk> => {
-        const [y, m] = ym.split("-").map(Number);
-        const lastDay = getDaysInMonth(y, m);
-        let monthInserted = 0;
-        let monthUpdated = 0;
-        let monthMaxUpdatedAt: string | null = null;
+    const rangePromises = ALL_RANGE_TASKS.map(({ ym, startDay, endDay }) =>
+      step.run(
+        `extraer-${ym}-dias-${startDay}-${endDay}`,
+        async (): Promise<RangeResultOk> => {
+          const [y, m] = ym.split("-").map(Number);
+          let rangeInserted = 0;
+          let rangeUpdated = 0;
+          let rangeMaxUpdatedAt: string | null = null;
 
-        for (let day = 1; day <= lastDay; day++) {
-          let exclusiveStartKey: string | undefined = undefined;
-          let hasMore = true;
-          while (hasMore) {
-            let res: {
-              inserted: number;
-              updated: number;
-              hasMore: boolean;
-              exclusiveStartKey: string | null;
-              maxUpdatedAt: string | null;
-            };
-            try {
-              res = (await client.action(
-                api.actions.fetchDatamappingForDayChunk,
-                { year: y, month: m, day, exclusiveStartKey }
-              )) as typeof res;
-            } catch (err) {
-              throw sanitizeConvexError(err);
-            }
+          for (let day = startDay; day <= endDay; day++) {
+            let exclusiveStartKey: string | undefined = undefined;
+            let hasMore = true;
+            while (hasMore) {
+              let res: {
+                inserted: number;
+                updated: number;
+                hasMore: boolean;
+                exclusiveStartKey: string | null;
+                maxUpdatedAt: string | null;
+              };
+              try {
+                res = (await client.action(
+                  api.actions.fetchDatamappingForDayChunk,
+                  { year: y, month: m, day, exclusiveStartKey }
+                )) as typeof res;
+              } catch (err) {
+                throw sanitizeConvexError(err);
+              }
 
-            monthInserted += res.inserted;
-            monthUpdated += res.updated;
-            if (
-              res.maxUpdatedAt &&
-              (!monthMaxUpdatedAt || res.maxUpdatedAt > monthMaxUpdatedAt)
-            ) {
-              monthMaxUpdatedAt = res.maxUpdatedAt;
+              rangeInserted += res.inserted;
+              rangeUpdated += res.updated;
+              if (
+                res.maxUpdatedAt &&
+                (!rangeMaxUpdatedAt || res.maxUpdatedAt > rangeMaxUpdatedAt)
+              ) {
+                rangeMaxUpdatedAt = res.maxUpdatedAt;
+              }
+              hasMore = res.hasMore;
+              exclusiveStartKey = res.exclusiveStartKey ?? undefined;
             }
-            hasMore = res.hasMore;
-            exclusiveStartKey = res.exclusiveStartKey ?? undefined;
           }
-        }
 
-        return {
-          ym,
-          status: "completed",
-          inserted: monthInserted,
-          updated: monthUpdated,
-          maxUpdatedAt: monthMaxUpdatedAt,
-        };
-      })
+          return {
+            ym,
+            startDay,
+            endDay,
+            status: "completed",
+            inserted: rangeInserted,
+            updated: rangeUpdated,
+            maxUpdatedAt: rangeMaxUpdatedAt,
+          };
+        }
+      )
     );
 
-    const settled = await Promise.allSettled(monthPromises);
-    const results: MonthResult[] = settled.map((outcome, i) => {
-      const ym = DATAMAPPING_MONTHS[i];
+    const settled = await Promise.allSettled(rangePromises);
+    const rangeResults: RangeResult[] = settled.map((outcome, i) => {
+      const task = ALL_RANGE_TASKS[i];
       if (outcome.status === "fulfilled") {
         return outcome.value;
       }
@@ -190,11 +245,60 @@ export const datamappingFullHistory = inngest.createFunction(
         outcome.reason instanceof Error
           ? outcome.reason.message
           : String(outcome.reason);
-      return { ym, status: "failed" as const, error: errorMsg };
+      return {
+        ym: task.ym,
+        startDay: task.startDay,
+        endDay: task.endDay,
+        status: "failed" as const,
+        error: errorMsg,
+      };
     });
 
-    const completed = results.filter((r): r is MonthResultOk => r.status === "completed");
-    const failed = results.filter((r): r is MonthResultFailed => r.status === "failed");
+    // Agregar por mes: un mes está completed solo si todos sus rangos completaron
+    const resultsByMonth = new Map<
+      string,
+      { inserted: number; updated: number; maxUpdatedAt: string | null; failed?: string }
+    >();
+    for (const ym of DATAMAPPING_MONTHS) {
+      resultsByMonth.set(ym, {
+        inserted: 0,
+        updated: 0,
+        maxUpdatedAt: null,
+      });
+    }
+    for (const r of rangeResults) {
+      const agg = resultsByMonth.get(r.ym)!;
+      if (r.status === "completed") {
+        agg.inserted += r.inserted;
+        agg.updated += r.updated;
+        if (
+          r.maxUpdatedAt &&
+          (!agg.maxUpdatedAt || r.maxUpdatedAt > agg.maxUpdatedAt)
+        ) {
+          agg.maxUpdatedAt = r.maxUpdatedAt;
+        }
+      } else {
+        agg.failed = (agg.failed ? agg.failed + "; " : "") + `días ${r.startDay}-${r.endDay}: ${r.error}`;
+      }
+    }
+
+    const completed: MonthResultOk[] = [];
+    const failed: MonthResultFailed[] = [];
+    for (const ym of DATAMAPPING_MONTHS) {
+      const agg = resultsByMonth.get(ym)!;
+      if (agg.failed) {
+        failed.push({ ym, status: "failed", error: agg.failed });
+      } else {
+        completed.push({
+          ym,
+          status: "completed",
+          inserted: agg.inserted,
+          updated: agg.updated,
+          maxUpdatedAt: agg.maxUpdatedAt,
+        });
+      }
+    }
+    const results: MonthResult[] = [...completed, ...failed];
 
     const maxWatermark = completed.reduce(
       (best, r) =>

@@ -21,7 +21,7 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { Upload, Loader2, Save, Plus, Trash2, ListTodo } from "lucide-react";
+import { Loader2, Save, Plus, Trash2, CloudDownload, Layers } from "lucide-react";
 import { IngestionStatus } from "@/components/dashboard/IngestionStatus";
 import {
   PERIOD_START,
@@ -31,7 +31,7 @@ import {
 
 const ALL_MONTHS = generateMonthRange(PERIOD_START, PERIOD_END);
 
-export default function UploadPage(): React.ReactElement {
+export default function GestionDatosPage(): React.ReactElement {
   const [selectedMonth, setSelectedMonth] = useState<string | null>(null);
   const [editing, setEditing] = useState<string | null>(null);
   const [editDesc, setEditDesc] = useState("");
@@ -177,10 +177,7 @@ export default function UploadPage(): React.ReactElement {
   };
 
   return (
-    <div
-      className="min-h-screen bg-january bg-grid p-6 md:p-8"
-      suppressHydrationWarning
-    >
+    <div className="p-6 md:p-8" suppressHydrationWarning>
       <div className="max-w-2xl mx-auto space-y-8">
         <div>
           <h1 className="text-3xl font-bold tracking-tight font-space-grotesk gradient-text-emerald">
@@ -188,13 +185,21 @@ export default function UploadPage(): React.ReactElement {
           </h1>
           <p className="text-muted-foreground mt-1">
             Registros cargados y configuración de códigos de movimiento.
-            Ejecuta cargas, enriquecimiento y agregaciones en{" "}
+            Ejecuta cargas en{" "}
             <Link
-              href="/jobs"
+              href="/configuracion/carga-fuentes"
               className="text-emerald-400 hover:text-emerald-300 font-medium inline-flex items-center gap-1"
             >
-              <ListTodo className="size-4" />
-              Jobs
+              <CloudDownload className="size-4" />
+              Carga de fuentes
+            </Link>
+            {" "}y agregaciones en{" "}
+            <Link
+              href="/configuracion/enriquecimiento-agregaciones"
+              className="text-emerald-400 hover:text-emerald-300 font-medium inline-flex items-center gap-1"
+            >
+              <Layers className="size-4" />
+              Enriquecimiento y agregaciones
             </Link>
             .
           </p>
@@ -482,7 +487,7 @@ export default function UploadPage(): React.ReactElement {
             <DialogTitle>Borrar mes {selectedMonth}</DialogTitle>
             <DialogDescription>
               Se eliminarán todos los registros y estadísticas de {selectedMonth}.
-              Los datos se pueden volver a sincronizar desde Jobs.
+              Los datos se pueden volver a sincronizar desde Carga de fuentes.
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
@@ -513,7 +518,7 @@ export default function UploadPage(): React.ReactElement {
             <DialogTitle>Borrar todo</DialogTitle>
             <DialogDescription>
               Se eliminarán todos los registros de pago y estadísticas de {PERIOD_START} a {PERIOD_END}.
-              Los datos se pueden volver a sincronizar desde Jobs.
+              Los datos se pueden volver a sincronizar desde Carga de fuentes.
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>

@@ -4,7 +4,7 @@ import { useState, useCallback, useRef, useEffect } from "react";
 import Link from "next/link";
 import { useAction, useQuery, useConvex } from "convex/react";
 import { api } from "convex/_generated/api";
-import type { Doc, Id } from "convex/_generated/dataModel";
+import type { Id } from "convex/_generated/dataModel";
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
 import {
@@ -15,95 +15,26 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table";
-import { Loader2, Database, RefreshCw, Trash2, ListTodo } from "lucide-react";
+import { Loader2, Database, RefreshCw, Trash2 } from "lucide-react";
 import { SyncDialog } from "@/components/dashboard/SyncDialog";
+import { formatErrorMessage } from "@/lib/formatErrorMessage";
 import {
-  PERIOD_START,
-  PERIOD_END,
   PERIOD_START_DATE,
   PERIOD_END_DATE,
+  PERIOD_END,
   DATAMAPPING_HISTORY_START,
   generateMonthRange,
   generateDateRange,
   ANALYSIS_MONTH_STRING,
 } from "@/lib/constants";
 
-const ALL_MONTHS = generateMonthRange(PERIOD_START, PERIOD_END);
-/** Meses de datamapping: desde portal Durango (2024-01) hasta período actual. */
 const DATAMAPPING_MONTHS = generateMonthRange(
   DATAMAPPING_HISTORY_START.slice(0, 7),
   PERIOD_END
 );
 const SYNC_STORAGE_KEY = "reconciliation-sync-in-progress";
 
-/** Sanitiza mensajes de error: evita mostrar HTML crudo (p. ej. página 524 de Cloudflare). */
-function formatErrorMessage(raw: string | null | undefined): string {
-  if (!raw || typeof raw !== "string") return "Error desconocido";
-  const trimmed = raw.trim();
-  if (!trimmed) return "Error desconocido";
-
-  // Detectar HTML crudo (respuestas HTTP de error como 524)
-  if (
-    trimmed.startsWith("<") ||
-    trimmed.includes("<!DOCTYPE") ||
-    trimmed.includes("<html")
-  ) {
-    if (
-      trimmed.includes("524") ||
-      trimmed.toLowerCase().includes("timeout") ||
-      trimmed.includes("A timeout occurred")
-    ) {
-      return "Timeout: el servidor tardó demasiado en responder (524). Intenta de nuevo.";
-    }
-    if (
-      trimmed.includes("502") ||
-      trimmed.includes("503") ||
-      trimmed.includes("504")
-    ) {
-      return "Error del servidor (5xx). Intenta de nuevo más tarde.";
-    }
-    return "Error del servidor. Intenta de nuevo.";
-  }
-
-  // Limitar longitud para evitar mensajes enormes
-  const maxLen = 500;
-  if (trimmed.length > maxLen) {
-    return `${trimmed.slice(0, maxLen)}...`;
-  }
-  return trimmed;
-}
-
-function StatusBadge({
-  status,
-}: {
-  status: "pending" | "running" | "completed" | "failed" | "cancelled";
-}): React.ReactElement {
-  const styles: Record<string, string> = {
-    pending: "text-muted-foreground",
-    running: "text-amber-400",
-    completed: "text-emerald-400",
-    failed: "text-destructive",
-    cancelled: "text-muted-foreground",
-  };
-  const labels: Record<string, string> = {
-    pending: "Pendiente",
-    running: "En curso",
-    completed: "Completado",
-    failed: "Error",
-    cancelled: "Cancelado",
-  };
-  return <span className={styles[status] ?? ""}>{labels[status] ?? status}</span>;
-}
-
-export default function JobsPage(): React.ReactElement {
+export default function CargaFuentesPage(): React.ReactElement {
   const [startDate, setStartDate] = useState(PERIOD_START_DATE);
   const [endDate, setEndDate] = useState(PERIOD_END_DATE);
   const [syncDialogOpen, setSyncDialogOpen] = useState(false);
@@ -120,18 +51,6 @@ export default function JobsPage(): React.ReactElement {
   const [syncError, setSyncError] = useState<string | null>(null);
   const syncCancelledRef = useRef(false);
 
-  const [selectedMonths, setSelectedMonths] = useState<Set<string>>(
-    new Set([ANALYSIS_MONTH_STRING])
-  );
-  const [cwAggregatesRunning, setCwAggregatesRunning] = useState(false);
-  const [cwAggregatesProgress, setCwAggregatesProgress] = useState(0);
-  const [cwAggregatesResult, setCwAggregatesResult] = useState<
-    Record<string, unknown> | null
-  >(null);
-  const [cwAggregatesError, setCwAggregatesError] = useState<string | null>(
-    null
-  );
-
   const [dynamoSinceDate, setDynamoSinceDate] = useState("2026-01-01");
   const [dynamoLoading, setDynamoLoading] = useState(false);
   const [dynamoResult, setDynamoResult] = useState<{
@@ -145,18 +64,14 @@ export default function JobsPage(): React.ReactElement {
   const [dynamoError, setDynamoError] = useState<string | null>(null);
   const [dynamoDeleteDialogOpen, setDynamoDeleteDialogOpen] = useState(false);
   const [dynamoClearTriggering, setDynamoClearTriggering] = useState(false);
-  const [dynamoHistoryError, setDynamoHistoryError] = useState<string | null>(
-    null
-  );
+  const [dynamoHistoryError, setDynamoHistoryError] = useState<string | null>(null);
   const [selectedDynamoReextractMonths, setSelectedDynamoReextractMonths] =
     useState<Set<string>>(new Set([ANALYSIS_MONTH_STRING]));
   const [dynamoReextractRunning, setDynamoReextractRunning] = useState(false);
   const [dynamoReextractResult, setDynamoReextractResult] = useState<
     Record<string, { inserted: number; updated: number }> | null
   >(null);
-  const [dynamoReextractError, setDynamoReextractError] = useState<string | null>(
-    null
-  );
+  const [dynamoReextractError, setDynamoReextractError] = useState<string | null>(null);
   const [dynamoIncrementalRunning, setDynamoIncrementalRunning] = useState(false);
   const [dynamoIncrementalResult, setDynamoIncrementalResult] = useState<{
     inserted: number;
@@ -165,44 +80,20 @@ export default function JobsPage(): React.ReactElement {
     newWatermark: string | null;
     message?: string;
   } | null>(null);
-  const [dynamoIncrementalError, setDynamoIncrementalError] = useState<
-    string | null
-  >(null);
-  const [incrementalInngestTriggering, setIncrementalInngestTriggering] =
-    useState(false);
-  const [loadFromDateInngestTriggering, setLoadFromDateInngestTriggering] =
-    useState(false);
+  const [dynamoIncrementalError, setDynamoIncrementalError] = useState<string | null>(null);
+  const [incrementalInngestTriggering, setIncrementalInngestTriggering] = useState(false);
+  const [loadFromDateInngestTriggering, setLoadFromDateInngestTriggering] = useState(false);
   const [loadFromDateInngestJobId, setLoadFromDateInngestJobId] = useState<
     Id<"pipelineJobs"> | null
   >(null);
-  const [fechaTransaccionSinceDate, setFechaTransaccionSinceDate] =
-    useState("2024-01-01");
+  const [fechaTransaccionSinceDate, setFechaTransaccionSinceDate] = useState("2024-01-01");
   const [fechaTransaccionFullInngestTriggering, setFechaTransaccionFullInngestTriggering] =
     useState(false);
   const [fechaTransaccionFromDateInngestTriggering, setFechaTransaccionFromDateInngestTriggering] =
     useState(false);
   const [fechaTransaccionFromDateInngestJobId, setFechaTransaccionFromDateInngestJobId] =
     useState<Id<"pipelineJobs"> | null>(null);
-
-  const [selectedDatamappingMonths, setSelectedDatamappingMonths] = useState<
-    Set<string>
-  >(new Set([ANALYSIS_MONTH_STRING]));
-  const [dmAggregatesRunning, setDmAggregatesRunning] = useState(false);
-  const [dmAggregatesResult, setDmAggregatesResult] = useState<Record<
-    string,
-    unknown
-  > | null>(null);
-  const [dmAggregatesError, setDmAggregatesError] = useState<string | null>(
-    null
-  );
-
-  const [pipelineJobsRefresh, setPipelineJobsRefresh] = useState(0);
-  const [pipelineJobsCursor, setPipelineJobsCursor] = useState<string | null>(
-    null
-  );
-  const [selectedJobId, setSelectedJobId] = useState<Id<"pipelineJobs"> | null>(
-    null
-  );
+  const [dynamoHistoryTriggering, setDynamoHistoryTriggering] = useState(false);
 
   useEffect(() => {
     try {
@@ -227,35 +118,10 @@ export default function JobsPage(): React.ReactElement {
         : [PERIOD_START_DATE, PERIOD_END_DATE];
   const periodDates = generateDateRange(effectiveStart, effectiveEnd);
 
-  const pipelineJobsResult = useQuery(
-    api.pipelineJobs.listPipelineJobs,
-    {
-      paginationOpts: {
-        numItems: 50,
-        cursor: pipelineJobsCursor ?? null,
-      },
-      _refresh: pipelineJobsRefresh,
-    }
-  );
-  const selectedPipelineJob = useQuery(
-    api.pipelineJobs.getPipelineJob,
-    selectedJobId ? { jobId: selectedJobId } : "skip"
-  );
-
   const fetchAndIngest = useAction(api.actions.fetchAndIngestForDate);
-  const buildAggregates = useAction(api.januaryETL.buildJanuaryAggregates);
-  const fetchDatamappingAndIngest = useAction(
-    api.actions.fetchDatamappingAndIngest
-  );
-  const fetchDatamappingForMonth = useAction(
-    api.actions.fetchDatamappingForMonth
-  );
-  const fetchDatamappingIncremental = useAction(
-    api.actions.fetchDatamappingIncremental
-  );
-  const buildDatamappingAggregates = useAction(
-    api.datamappingETL.buildDatamappingAggregates
-  );
+  const fetchDatamappingAndIngest = useAction(api.actions.fetchDatamappingAndIngest);
+  const fetchDatamappingForMonth = useAction(api.actions.fetchDatamappingForMonth);
+  const fetchDatamappingIncremental = useAction(api.actions.fetchDatamappingIncremental);
   const convex = useConvex();
   const [datamappingWatermark, setDatamappingWatermark] = useState<{
     lastUpdatedAt: string | null;
@@ -341,26 +207,6 @@ export default function JobsPage(): React.ReactElement {
     syncCancelledRef.current = true;
   }, []);
 
-  const handleBuildCwAggregates = useCallback(async (): Promise<void> => {
-    setCwAggregatesRunning(true);
-    setCwAggregatesError(null);
-    setCwAggregatesResult(null);
-    setCwAggregatesProgress(10);
-    try {
-      const months = Array.from(selectedMonths).sort();
-      setCwAggregatesProgress(30);
-      const res = await buildAggregates({ months });
-      setCwAggregatesProgress(100);
-      setCwAggregatesResult(res as Record<string, unknown>);
-    } catch (e) {
-      setCwAggregatesError(
-        e instanceof Error ? e.message : "Error al generar agregados"
-      );
-    } finally {
-      setCwAggregatesRunning(false);
-    }
-  }, [buildAggregates, selectedMonths]);
-
   const handleLoadDynamo = useCallback(async (): Promise<void> => {
     setDynamoLoading(true);
     setDynamoResult(null);
@@ -407,20 +253,16 @@ export default function JobsPage(): React.ReactElement {
     }
   }, [fetchDatamappingAndIngest, dynamoSinceDate]);
 
-  const [dynamoHistoryTriggering, setDynamoHistoryTriggering] = useState(false);
   const handleDynamoFullHistory = useCallback(async (): Promise<void> => {
     setDynamoHistoryError(null);
     setDynamoHistoryTriggering(true);
     try {
-      const res = await fetch("/api/datamapping/full-history", {
-        method: "POST",
-      });
+      const res = await fetch("/api/datamapping/full-history", { method: "POST" });
       const text = await res.text();
       let data: { ok?: boolean; error?: string } = {};
       try {
         data = JSON.parse(text) as { ok?: boolean; error?: string };
       } catch {
-        // Respuesta no-JSON (p. ej. HTML de Cloudflare 524)
         if (text.includes("524") || text.toLowerCase().includes("timeout")) {
           setDynamoHistoryError(
             "Timeout: el servidor tardó demasiado en responder (524). Intenta de nuevo."
@@ -523,9 +365,7 @@ export default function JobsPage(): React.ReactElement {
   const handleIncrementalInngest = useCallback(async (): Promise<void> => {
     setIncrementalInngestTriggering(true);
     try {
-      const res = await fetch("/api/datamapping/incremental", {
-        method: "POST",
-      });
+      const res = await fetch("/api/datamapping/incremental", { method: "POST" });
       const data = (await res.json()) as { ok?: boolean; error?: string };
       if (!res.ok || !data.ok) {
         setDynamoIncrementalError(data.error ?? "Error al disparar Inngest");
@@ -618,180 +458,87 @@ export default function JobsPage(): React.ReactElement {
     }
   }, [fechaTransaccionSinceDate]);
 
-  const toggleDatamappingMonth = (month: string): void => {
-    setSelectedDatamappingMonths((prev) => {
-      const next = new Set(prev);
-      if (next.has(month)) next.delete(month);
-      else next.add(month);
-      return next;
-    });
-  };
-
-  const handleBuildDatamapping = useCallback(async (): Promise<void> => {
-    setDmAggregatesRunning(true);
-    setDmAggregatesResult(null);
-    setDmAggregatesError(null);
-    try {
-      const months = Array.from(selectedDatamappingMonths).sort();
-      const res = await buildDatamappingAggregates({ months });
-      setDmAggregatesResult(res as Record<string, unknown>);
-    } catch (err) {
-      setDmAggregatesError(
-        err instanceof Error ? err.message : "Error al generar agregaciones"
-      );
-    } finally {
-      setDmAggregatesRunning(false);
-    }
-  }, [buildDatamappingAggregates, selectedDatamappingMonths]);
-
-  const toggleMonth = (month: string): void => {
-    setSelectedMonths((prev) => {
-      const next = new Set(prev);
-      if (next.has(month)) next.delete(month);
-      else next.add(month);
-      return next;
-    });
-  };
-
-  const pipelineJobs =
-    pipelineJobsResult?.page ?? ([] as Doc<"pipelineJobs">[]);
-  const pipelineJobsIsDone = pipelineJobsResult?.isDone ?? true;
-  const pipelineJobsContinueCursor = pipelineJobsResult?.continueCursor ?? null;
+  const busy =
+    latestDatamappingClearJob?.status === "pending" ||
+    latestDatamappingClearJob?.status === "running" ||
+    latestDatamappingFullHistoryJob?.status === "pending" ||
+    latestDatamappingFullHistoryJob?.status === "running" ||
+    latestFechaTransaccionFullJob?.status === "pending" ||
+    latestFechaTransaccionFullJob?.status === "running" ||
+    dynamoReextractRunning ||
+    dynamoIncrementalRunning ||
+    dynamoLoading ||
+    syncing;
 
   return (
-    <div
-      className="min-h-screen bg-january bg-grid p-6 md:p-8"
-      suppressHydrationWarning
-    >
+    <div className="p-6 md:p-8" suppressHydrationWarning>
       <div className="max-w-2xl mx-auto space-y-8">
         <div>
-          <h1 className="text-3xl font-bold tracking-tight font-space-grotesk gradient-text-emerald flex items-center gap-2">
-            <ListTodo className="size-8" />
-            Jobs
+          <h1 className="text-3xl font-bold tracking-tight font-space-grotesk gradient-text-emerald">
+            Carga de fuentes
           </h1>
           <p className="text-muted-foreground mt-1">
-            Ejecuta cargas, extracciones, agregaciones y enriquecimiento de
-            datos.
+            Sincroniza CloudWatch y Datamapping (DynamoDB). El estado de los jobs
+            se puede ver en{" "}
+            <Link
+              href="/configuracion/status"
+              className="text-emerald-400 hover:text-emerald-300 font-medium"
+            >
+              Status de actualizaciones
+            </Link>
+            .
           </p>
         </div>
 
-        {/* 1. Pipeline Jobs */}
+        {/* Sincronizar CloudWatch */}
         <div className="glass-card rounded-xl p-6 space-y-4">
-          <div className="flex items-center justify-between gap-2">
-            <div>
-              <h2 className="text-lg font-semibold">Pipeline Jobs</h2>
-              <p className="text-sm text-muted-foreground">
-                Estado de jobs de Inngest y acciones async (vacío hasta que se
-                implemente el disparo vía Inngest).
-              </p>
+          <h2 className="text-lg font-semibold flex items-center gap-2">
+            <RefreshCw className="size-5" />
+            Sincronizar CloudWatch
+          </h2>
+          <p className="text-sm text-muted-foreground">
+            Extrae datos de CloudWatch Logs para cada día del período.
+          </p>
+          <div className="flex flex-wrap gap-4 items-end">
+            <div className="flex flex-col gap-1">
+              <label className="text-xs text-muted-foreground">Período desde</label>
+              <input
+                type="date"
+                value={startDate}
+                onChange={(e) => setStartDate(e.target.value)}
+                min={PERIOD_START_DATE}
+                max={PERIOD_END_DATE}
+                className="bg-slate-800 border border-slate-600 rounded px-3 py-2 text-sm"
+              />
+            </div>
+            <div className="flex flex-col gap-1">
+              <label className="text-xs text-muted-foreground">hasta</label>
+              <input
+                type="date"
+                value={endDate}
+                onChange={(e) => setEndDate(e.target.value)}
+                min={PERIOD_START_DATE}
+                max={PERIOD_END_DATE}
+                className="bg-slate-800 border border-slate-600 rounded px-3 py-2 text-sm"
+              />
             </div>
             <Button
-              variant="outline"
-              size="icon"
-              className="shrink-0"
-              onClick={() => setPipelineJobsRefresh((k) => k + 1)}
-              title="Actualizar estado"
+              size="sm"
+              onClick={() => {
+                setSyncResults(null);
+                setSyncError(null);
+                setSyncDialogOpen(true);
+              }}
+              disabled={syncing}
+              className="gap-2 bg-indigo-600 hover:bg-indigo-700"
             >
-              <RefreshCw className="size-4" />
+              <RefreshCw className="size-3.5" />
+              Sincronizar Período
             </Button>
           </div>
-          {pipelineJobsResult === undefined ? (
-            <p className="text-sm text-muted-foreground">Cargando...</p>
-          ) : pipelineJobs.length === 0 ? (
-            <p className="text-sm text-muted-foreground">
-              Aún no hay jobs registrados.
-            </p>
-          ) : (
-            <>
-              <div className="rounded-md border border-slate-700 overflow-x-auto">
-                <Table>
-                  <TableHeader>
-                    <TableRow className="border-slate-700">
-                      <TableHead className="text-xs text-muted-foreground">
-                        Tipo
-                      </TableHead>
-                      <TableHead className="text-xs text-muted-foreground">
-                        Estado
-                      </TableHead>
-                      <TableHead className="text-xs text-muted-foreground">
-                        Progreso
-                      </TableHead>
-                      <TableHead className="text-xs text-muted-foreground">
-                        Inicio
-                      </TableHead>
-                      <TableHead className="text-xs text-muted-foreground w-20">
-                        Acción
-                      </TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {pipelineJobs.map((job) => (
-                      <TableRow
-                        key={job._id}
-                        className="border-slate-700 cursor-pointer hover:bg-slate-800/50"
-                        onClick={() => setSelectedJobId(job._id)}
-                      >
-                        <TableCell className="text-xs py-2">
-                          {job.jobType}
-                        </TableCell>
-                        <TableCell className="text-xs py-2">
-                          <StatusBadge status={job.status} />
-                        </TableCell>
-                        <TableCell className="text-xs py-2">
-                          {job.progress?.total != null &&
-                          job.progress.current != null ? (
-                            <Progress
-                              value={
-                                (job.progress.current / job.progress.total) *
-                                100
-                              }
-                              className="h-2 w-20"
-                            />
-                          ) : (
-                            "—"
-                          )}
-                        </TableCell>
-                        <TableCell className="text-xs py-2">
-                          {new Date(job.startedAt).toLocaleString(undefined, {
-                            dateStyle: "short",
-                            timeStyle: "short",
-                          })}
-                        </TableCell>
-                        <TableCell className="py-2">
-                          <Button
-                            size="sm"
-                            variant="ghost"
-                            className="text-xs h-7"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              setSelectedJobId(job._id);
-                            }}
-                          >
-                            Detalle
-                          </Button>
-                        </TableCell>
-                      </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
-              </div>
-              {!pipelineJobsIsDone && pipelineJobsContinueCursor && (
-                <Button
-                  size="sm"
-                  variant="outline"
-                  onClick={() =>
-                    setPipelineJobsCursor(pipelineJobsContinueCursor)
-                  }
-                  className="bg-white/3 border-border/50"
-                >
-                  Cargar más
-                </Button>
-              )}
-            </>
-          )}
         </div>
 
-        {/* 2. Datamapping (DynamoDB) */}
+        {/* Datamapping (DynamoDB) */}
         <div className="glass-card rounded-xl p-6 space-y-6">
           <h2 className="text-lg font-semibold flex items-center gap-2">
             <Database className="size-5" />
@@ -808,30 +555,19 @@ export default function JobsPage(): React.ReactElement {
             duplicados). ~900k registros total, +400k pagados.
           </p>
 
-          {/* 4a. Histórico completo */}
+          {/* 1. Histórico completo */}
           <div className="space-y-2">
             <h3 className="text-sm font-medium">
               1. Histórico completo (desde {DATAMAPPING_HISTORY_START})
             </h3>
             <p className="text-xs text-muted-foreground">
               Dispara job en Inngest (1 ejecución por mes, en paralelo). Portal
-              Durango entró en operación ene 2024. Avance persistido en Convex
-              (independiente de refresh/navegación).
+              Durango entró en operación ene 2024. Avance persistido en Convex.
             </p>
             <Button
               size="sm"
               onClick={handleDynamoFullHistory}
-              disabled={
-                dynamoHistoryTriggering ||
-                (latestDatamappingClearJob?.status === "pending" ||
-                latestDatamappingClearJob?.status === "running") ||
-                (latestDatamappingFullHistoryJob?.status === "pending" ||
-                latestDatamappingFullHistoryJob?.status === "running") ||
-                dynamoReextractRunning ||
-                dynamoIncrementalRunning ||
-                dynamoLoading ||
-                syncing
-              }
+              disabled={dynamoHistoryTriggering || busy}
               className="gap-2 bg-amber-600 hover:bg-amber-700"
             >
               {dynamoHistoryTriggering ? (
@@ -902,12 +638,11 @@ export default function JobsPage(): React.ReactElement {
             )}
           </div>
 
-          {/* 4b. Re-extraer período */}
+          {/* 2. Re-extraer período */}
           <div className="space-y-2 border-t border-slate-700/50 pt-4">
             <h3 className="text-sm font-medium">2. Re-extraer período</h3>
             <p className="text-xs text-muted-foreground">
-              Re-extrae meses seleccionados (upsert: actualiza registros
-              modificados).
+              Re-extrae meses seleccionados (upsert: actualiza registros modificados).
             </p>
             <div className="flex flex-wrap gap-2 mb-2">
               <Button
@@ -956,13 +691,7 @@ export default function JobsPage(): React.ReactElement {
               disabled={
                 dynamoReextractRunning ||
                 selectedDynamoReextractMonths.size === 0 ||
-                (latestDatamappingClearJob?.status === "pending" ||
-                latestDatamappingClearJob?.status === "running") ||
-                (latestDatamappingFullHistoryJob?.status === "pending" ||
-                latestDatamappingFullHistoryJob?.status === "running") ||
-                dynamoIncrementalRunning ||
-                dynamoLoading ||
-                syncing
+                busy
               }
               className="gap-2 bg-amber-600/80 hover:bg-amber-600"
             >
@@ -991,13 +720,11 @@ export default function JobsPage(): React.ReactElement {
               </div>
             )}
             {dynamoReextractError && !dynamoReextractRunning && (
-              <div className="text-sm text-destructive">
-                {dynamoReextractError}
-              </div>
+              <div className="text-sm text-destructive">{dynamoReextractError}</div>
             )}
           </div>
 
-          {/* 4c. Incremental */}
+          {/* 3. Incremental */}
           <div className="space-y-2 border-t border-slate-700/50 pt-4">
             <h3 className="text-sm font-medium">3. Incremental (últimos cambios)</h3>
             <p className="text-xs text-muted-foreground">
@@ -1016,16 +743,7 @@ export default function JobsPage(): React.ReactElement {
               <Button
                 size="sm"
                 onClick={handleDynamoIncremental}
-                disabled={
-                  dynamoIncrementalRunning ||
-                  (latestDatamappingClearJob?.status === "pending" ||
-                  latestDatamappingClearJob?.status === "running") ||
-                  (latestDatamappingFullHistoryJob?.status === "pending" ||
-                  latestDatamappingFullHistoryJob?.status === "running") ||
-                  dynamoReextractRunning ||
-                  dynamoLoading ||
-                  syncing
-                }
+                disabled={dynamoIncrementalRunning || busy}
                 className="gap-2 bg-slate-600 hover:bg-slate-500"
               >
                 {dynamoIncrementalRunning ? (
@@ -1044,16 +762,7 @@ export default function JobsPage(): React.ReactElement {
                 size="sm"
                 variant="outline"
                 onClick={handleIncrementalInngest}
-                disabled={
-                  incrementalInngestTriggering ||
-                  (latestDatamappingClearJob?.status === "pending" ||
-                  latestDatamappingClearJob?.status === "running") ||
-                  (latestDatamappingFullHistoryJob?.status === "pending" ||
-                  latestDatamappingFullHistoryJob?.status === "running") ||
-                  dynamoReextractRunning ||
-                  dynamoLoading ||
-                  syncing
-                }
+                disabled={incrementalInngestTriggering || busy}
                 className="gap-2 bg-white/3 border-border/50"
               >
                 {incrementalInngestTriggering ? (
@@ -1087,13 +796,11 @@ export default function JobsPage(): React.ReactElement {
               </div>
             )}
             {dynamoIncrementalError && !dynamoIncrementalRunning && (
-              <div className="text-sm text-destructive">
-                {dynamoIncrementalError}
-              </div>
+              <div className="text-sm text-destructive">{dynamoIncrementalError}</div>
             )}
           </div>
 
-          {/* 4d. Carga manual (legacy) + Borrar */}
+          {/* 4. Carga manual + Borrar */}
           <div className="flex flex-wrap gap-4 items-end border-t border-slate-700/50 pt-4">
             <div className="flex flex-col gap-1">
               <label className="text-xs text-muted-foreground">
@@ -1109,16 +816,7 @@ export default function JobsPage(): React.ReactElement {
             <Button
               size="sm"
               onClick={handleLoadDynamo}
-              disabled={
-                dynamoLoading ||
-                (latestDatamappingClearJob?.status === "pending" ||
-                latestDatamappingClearJob?.status === "running") ||
-                (latestDatamappingFullHistoryJob?.status === "pending" ||
-                latestDatamappingFullHistoryJob?.status === "running") ||
-                dynamoReextractRunning ||
-                dynamoIncrementalRunning ||
-                syncing
-              }
+              disabled={dynamoLoading || busy}
               variant="outline"
               className="gap-2 bg-white/3 border-border/50"
             >
@@ -1135,17 +833,7 @@ export default function JobsPage(): React.ReactElement {
               size="sm"
               variant="outline"
               onClick={handleLoadFromDateInngest}
-              disabled={
-                loadFromDateInngestTriggering ||
-                dynamoLoading ||
-                (latestDatamappingClearJob?.status === "pending" ||
-                latestDatamappingClearJob?.status === "running") ||
-                (latestDatamappingFullHistoryJob?.status === "pending" ||
-                latestDatamappingFullHistoryJob?.status === "running") ||
-                dynamoReextractRunning ||
-                dynamoIncrementalRunning ||
-                syncing
-              }
+              disabled={loadFromDateInngestTriggering || dynamoLoading || busy}
               className="gap-2 bg-white/3 border-border/50"
             >
               {loadFromDateInngestTriggering ? (
@@ -1154,9 +842,16 @@ export default function JobsPage(): React.ReactElement {
                 "Cargar desde fecha (Inngest)"
               )}
             </Button>
-            {loadFromDateInngestJobId && (
+            {(loadFromDateInngestJobId || fechaTransaccionFromDateInngestJobId) && (
               <span className="text-xs text-muted-foreground">
-                Job creado. Ver en lista de jobs abajo.
+                Job creado. Ver en{" "}
+                <Link
+                  href="/configuracion/status"
+                  className="text-emerald-400 hover:text-emerald-300"
+                >
+                  Status de actualizaciones
+                </Link>
+                .
               </span>
             )}
             <Button
@@ -1166,10 +861,10 @@ export default function JobsPage(): React.ReactElement {
               disabled={
                 dynamoLoading ||
                 dynamoClearTriggering ||
-                (latestDatamappingClearJob?.status === "pending" ||
-                latestDatamappingClearJob?.status === "running") ||
-                (latestDatamappingFullHistoryJob?.status === "pending" ||
-                latestDatamappingFullHistoryJob?.status === "running") ||
+                latestDatamappingClearJob?.status === "pending" ||
+                latestDatamappingClearJob?.status === "running" ||
+                latestDatamappingFullHistoryJob?.status === "pending" ||
+                latestDatamappingFullHistoryJob?.status === "running" ||
                 dynamoReextractRunning ||
                 dynamoIncrementalRunning ||
                 syncing
@@ -1225,11 +920,14 @@ export default function JobsPage(): React.ReactElement {
             )}
           </div>
 
-          {/* 4e. Backfill fechaTransaccion (DataMapping) */}
+          {/* 5. Backfill fechaTransaccion */}
           <div className="flex flex-wrap gap-4 items-end border-t border-slate-700/50 pt-4">
-            <h3 className="text-sm font-medium w-full">4e. Backfill fechaTransaccion (DataMapping)</h3>
+            <h3 className="text-sm font-medium w-full">
+              5. Backfill fechaTransaccion (DataMapping)
+            </h3>
             <p className="text-xs text-muted-foreground w-full -mt-2">
-              Llena fechaTransaccion desde paymentRecords (por referencia); fallback a updatedAt si no existe en CloudWatch.
+              Llena fechaTransaccion desde paymentRecords (por referencia); fallback a
+              updatedAt si no existe en CloudWatch.
             </p>
             <div className="flex flex-col gap-1">
               <label className="text-xs text-muted-foreground">
@@ -1246,19 +944,7 @@ export default function JobsPage(): React.ReactElement {
               size="sm"
               variant="outline"
               onClick={handleFechaTransaccionFullInngest}
-              disabled={
-                fechaTransaccionFullInngestTriggering ||
-                (latestDatamappingClearJob?.status === "pending" ||
-                latestDatamappingClearJob?.status === "running") ||
-                (latestDatamappingFullHistoryJob?.status === "pending" ||
-                latestDatamappingFullHistoryJob?.status === "running") ||
-                (latestFechaTransaccionFullJob?.status === "pending" ||
-                latestFechaTransaccionFullJob?.status === "running") ||
-                dynamoReextractRunning ||
-                dynamoIncrementalRunning ||
-                dynamoLoading ||
-                syncing
-              }
+              disabled={fechaTransaccionFullInngestTriggering || busy}
               className="gap-2 bg-white/3 border-border/50"
             >
               {fechaTransaccionFullInngestTriggering ? (
@@ -1270,19 +956,7 @@ export default function JobsPage(): React.ReactElement {
               size="sm"
               variant="outline"
               onClick={handleFechaTransaccionFromDateInngest}
-              disabled={
-                fechaTransaccionFromDateInngestTriggering ||
-                (latestDatamappingClearJob?.status === "pending" ||
-                latestDatamappingClearJob?.status === "running") ||
-                (latestDatamappingFullHistoryJob?.status === "pending" ||
-                latestDatamappingFullHistoryJob?.status === "running") ||
-                (latestFechaTransaccionFullJob?.status === "pending" ||
-                latestFechaTransaccionFullJob?.status === "running") ||
-                dynamoReextractRunning ||
-                dynamoIncrementalRunning ||
-                dynamoLoading ||
-                syncing
-              }
+              disabled={fechaTransaccionFromDateInngestTriggering || busy}
               className="gap-2 bg-white/3 border-border/50"
             >
               {fechaTransaccionFromDateInngestTriggering ? (
@@ -1290,11 +964,6 @@ export default function JobsPage(): React.ReactElement {
               ) : null}
               Llenar desde fecha (Inngest)
             </Button>
-            {fechaTransaccionFromDateInngestJobId && (
-              <span className="text-xs text-muted-foreground">
-                Job creado. Ver en lista de jobs abajo.
-              </span>
-            )}
             {latestFechaTransaccionFullJob?.status === "running" && (
               <div className="space-y-2 w-full max-w-sm">
                 <Progress
@@ -1337,246 +1006,11 @@ export default function JobsPage(): React.ReactElement {
           </div>
           {dynamoResult && !dynamoLoading && (
             <div className="text-sm text-emerald-400">
-              Carga manual: {dynamoResult.totalInserted} ins,{" "}
-              {dynamoResult.totalUpdated} act
+              Carga manual: {dynamoResult.totalInserted} ins, {dynamoResult.totalUpdated} act
             </div>
           )}
           {dynamoError && !dynamoLoading && (
             <div className="text-sm text-destructive">{dynamoError}</div>
-          )}
-        </div>
-
-        {/* 3. Agregados DataMapping */}
-        <div className="glass-card rounded-xl p-6 space-y-4">
-          <h3 className="text-sm font-semibold">Agregados DataMapping</h3>
-          <p className="text-xs text-muted-foreground">
-            Genera tablas agregadas desde datamappingRecords para Análisis
-            Mensual/Anual con fuente DataMapping.
-          </p>
-          <div className="flex flex-wrap gap-2 mb-2">
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() =>
-                setSelectedDatamappingMonths(new Set(ALL_MONTHS))
-              }
-              disabled={dmAggregatesRunning}
-              className="bg-white/3 border-border/50"
-            >
-              Seleccionar todos
-            </Button>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => setSelectedDatamappingMonths(new Set())}
-              disabled={dmAggregatesRunning}
-              className="bg-white/3 border-border/50"
-            >
-              Deseleccionar todos
-            </Button>
-          </div>
-          <div className="flex flex-wrap gap-2 mb-3">
-            {ALL_MONTHS.map((m) => (
-              <label
-                key={m}
-                className="flex items-center gap-2 cursor-pointer px-3 py-1.5 rounded-lg border border-slate-700/50 hover:bg-slate-800/30 text-sm"
-              >
-                <input
-                  type="checkbox"
-                  checked={selectedDatamappingMonths.has(m)}
-                  onChange={() => toggleDatamappingMonth(m)}
-                  disabled={dmAggregatesRunning}
-                  className="rounded"
-                  suppressHydrationWarning
-                />
-                <span>{m}</span>
-              </label>
-            ))}
-          </div>
-          <Button
-            size="sm"
-            onClick={handleBuildDatamapping}
-            disabled={
-              dmAggregatesRunning ||
-              selectedDatamappingMonths.size === 0 ||
-              dynamoLoading
-            }
-            className="gap-2 bg-amber-600 hover:bg-amber-700"
-          >
-            {dmAggregatesRunning ? (
-              <>
-                <Loader2 className="size-3.5 animate-spin" />
-                Generando...
-              </>
-            ) : (
-              <>
-                <Database className="size-3.5" />
-                Generar tablas agregadas (DataMapping)
-              </>
-            )}
-          </Button>
-          {dmAggregatesResult && !dmAggregatesRunning && (
-            <div className="rounded-lg bg-emerald-500/10 border border-emerald-500/30 p-3 text-sm text-emerald-400">
-              <p className="font-medium">Agregaciones completadas</p>
-              <pre className="text-xs mt-1 overflow-auto">
-                {JSON.stringify(dmAggregatesResult, null, 2)}
-              </pre>
-            </div>
-          )}
-          {dmAggregatesError && !dmAggregatesRunning && (
-            <div className="rounded-lg bg-destructive/10 border border-destructive/30 p-3 text-sm text-destructive">
-              {dmAggregatesError}
-            </div>
-          )}
-        </div>
-
-        {/* 4. Enriquecimiento = en la carga */}
-        <div className="glass-card rounded-xl p-6 space-y-2">
-          <h3 className="text-sm font-semibold">Enriquecimiento (en la carga)</h3>
-          <p className="text-xs text-muted-foreground">
-            La carga desde DynamoDB ya incluye enriquecimiento en un solo paso: se
-            extraen RFC, placa, evoId, codiId, expirationDate, folioNumber, loteId,
-            procedureCategory, tramiteId y userId del rawJson y se guardan en cada
-            registro. No hace falta ejecutar enriquecimiento ni backfill por
-            separado. Búsqueda por RFC en{" "}
-            <Link
-              href="/reconcile/rfc-referencias"
-              className="text-emerald-400 hover:text-emerald-300"
-            >
-              RFC Referencias
-            </Link>
-            .
-          </p>
-        </div>
-
-        {/* 5. Sincronizar CloudWatch */}
-        <div className="glass-card rounded-xl p-6 space-y-4">
-          <h2 className="text-lg font-semibold flex items-center gap-2">
-            <RefreshCw className="size-5" />
-            Sincronizar CloudWatch
-          </h2>
-          <p className="text-sm text-muted-foreground">
-            Extrae datos de CloudWatch Logs para cada día del período.
-          </p>
-          <div className="flex flex-wrap gap-4 items-end">
-            <div className="flex flex-col gap-1">
-              <label className="text-xs text-muted-foreground">
-                Período desde
-              </label>
-              <input
-                type="date"
-                value={startDate}
-                onChange={(e) => setStartDate(e.target.value)}
-                min={PERIOD_START_DATE}
-                max={PERIOD_END_DATE}
-                className="bg-slate-800 border border-slate-600 rounded px-3 py-2 text-sm"
-              />
-            </div>
-            <div className="flex flex-col gap-1">
-              <label className="text-xs text-muted-foreground">hasta</label>
-              <input
-                type="date"
-                value={endDate}
-                onChange={(e) => setEndDate(e.target.value)}
-                min={PERIOD_START_DATE}
-                max={PERIOD_END_DATE}
-                className="bg-slate-800 border border-slate-600 rounded px-3 py-2 text-sm"
-              />
-            </div>
-            <Button
-              size="sm"
-              onClick={() => {
-                setSyncResults(null);
-                setSyncError(null);
-                setSyncDialogOpen(true);
-              }}
-              disabled={syncing}
-              className="gap-2 bg-indigo-600 hover:bg-indigo-700"
-            >
-              <RefreshCw className="size-3.5" />
-              Sincronizar Período
-            </Button>
-          </div>
-        </div>
-
-        {/* 7. Agregados CloudWatch */}
-        <div className="glass-card rounded-xl p-6 space-y-4">
-          <h2 className="text-lg font-semibold">Agregados CloudWatch</h2>
-          <p className="text-sm text-muted-foreground">
-            Genera tablas agregadas desde paymentRecords para Análisis Mensual y
-            Anual.
-          </p>
-          <div className="flex flex-wrap gap-2 mb-2">
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => setSelectedMonths(new Set(ALL_MONTHS))}
-              disabled={cwAggregatesRunning}
-              className="bg-white/3 border-border/50"
-            >
-              Seleccionar todos
-            </Button>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => setSelectedMonths(new Set())}
-              disabled={cwAggregatesRunning}
-              className="bg-white/3 border-border/50"
-            >
-              Deseleccionar todos
-            </Button>
-          </div>
-          <div className="flex flex-wrap gap-2 mb-3">
-            {ALL_MONTHS.map((m) => (
-              <label
-                key={m}
-                className="flex items-center gap-2 cursor-pointer px-3 py-1.5 rounded-lg border border-slate-700/50 hover:bg-slate-800/30 text-sm"
-              >
-                <input
-                  type="checkbox"
-                  checked={selectedMonths.has(m)}
-                  onChange={() => toggleMonth(m)}
-                  disabled={cwAggregatesRunning}
-                  className="rounded"
-                  suppressHydrationWarning
-                />
-                <span>{m}</span>
-              </label>
-            ))}
-          </div>
-          <Button
-            size="sm"
-            onClick={handleBuildCwAggregates}
-            disabled={cwAggregatesRunning || selectedMonths.size === 0}
-            className="gap-2 bg-indigo-600 hover:bg-indigo-700"
-          >
-            {cwAggregatesRunning ? (
-              <>
-                <Loader2 className="size-3.5 animate-spin" />
-                Generando...
-              </>
-            ) : (
-              <>
-                <RefreshCw className="size-3.5" />
-                Generar tablas agregadas
-              </>
-            )}
-          </Button>
-          {cwAggregatesRunning && (
-            <Progress value={cwAggregatesProgress} className="h-2" />
-          )}
-          {cwAggregatesResult && !cwAggregatesRunning && (
-            <div className="rounded-lg bg-emerald-500/10 border border-emerald-500/30 p-3 text-sm text-emerald-400">
-              <p className="font-medium">Agregados completados</p>
-              <pre className="text-xs mt-1 overflow-auto">
-                {JSON.stringify(cwAggregatesResult, null, 2)}
-              </pre>
-            </div>
-          )}
-          {cwAggregatesError && !cwAggregatesRunning && (
-            <div className="rounded-lg bg-destructive/10 border border-destructive/30 p-3 text-sm text-destructive">
-              {cwAggregatesError}
-            </div>
           )}
         </div>
       </div>
@@ -1606,8 +1040,8 @@ export default function JobsPage(): React.ReactElement {
             <DialogTitle>Borrar datos DynamoDB</DialogTitle>
             <DialogDescription>
               Se disparará un job (Inngest) que borrará todos los registros de
-              datamappingRecords y la marca de agua. Podrás ver el avance en la
-              UI y volver a cargar desde DynamoDB después.
+              datamappingRecords y la marca de agua. Podrás ver el avance en
+              Status de actualizaciones y volver a cargar desde DynamoDB después.
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
@@ -1639,134 +1073,6 @@ export default function JobsPage(): React.ReactElement {
               className="bg-white/3 border-border/50"
             >
               Cancelar
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
-      <Dialog
-        open={selectedJobId != null}
-        onOpenChange={(open) => !open && setSelectedJobId(null)}
-      >
-        <DialogContent className="glass-card-elevated border-border/50 max-w-lg max-h-[90vh] flex flex-col">
-          <DialogHeader>
-            <DialogTitle>Detalle del job</DialogTitle>
-          </DialogHeader>
-          {selectedPipelineJob ? (
-            <div className="space-y-2 text-sm overflow-y-auto min-h-0 flex-1 pr-1">
-              <p>
-                <span className="text-muted-foreground">Tipo:</span>{" "}
-                {selectedPipelineJob.jobType}
-              </p>
-              <p>
-                <span className="text-muted-foreground">Estado:</span>{" "}
-                <StatusBadge status={selectedPipelineJob.status} />
-              </p>
-              <div>
-                <p>
-                  <span className="text-muted-foreground">Scope:</span>
-                </p>
-                <pre className="text-xs overflow-auto bg-slate-800/50 p-2 rounded mt-1 max-h-24">
-                  {JSON.stringify(selectedPipelineJob.scope, null, 2)}
-                </pre>
-              </div>
-              {selectedPipelineJob.progress && (
-                <p>
-                  <span className="text-muted-foreground">Progreso:</span>{" "}
-                  {selectedPipelineJob.progress.current}
-                  {selectedPipelineJob.progress.total != null &&
-                    ` / ${selectedPipelineJob.progress.total}`}{" "}
-                  {selectedPipelineJob.progress.unit ?? ""}
-                  {selectedPipelineJob.progress.message &&
-                    ` — ${selectedPipelineJob.progress.message}`}
-                </p>
-              )}
-              {selectedPipelineJob.result && (
-                <div>
-                  <p>
-                    <span className="text-muted-foreground">Resultado:</span>
-                  </p>
-                  {(() => {
-                    const r = selectedPipelineJob.result as Record<string, unknown>;
-                    const hasSummary =
-                      r.summary != null ||
-                      (Array.isArray(r.completedMonths) && Array.isArray(r.failedMonths));
-                    return (
-                      <>
-                        {hasSummary && (
-                          <div className="bg-slate-800/50 p-3 rounded mt-1 space-y-1.5 text-xs">
-                            {typeof r.summary === "string" && (
-                              <p className="font-medium text-emerald-400">{r.summary}</p>
-                            )}
-                            {typeof r.totalInserted === "number" &&
-                              typeof r.totalUpdated === "number" && (
-                              <p>
-                                Total: {r.totalInserted} insertados, {r.totalUpdated}{" "}
-                                actualizados
-                              </p>
-                            )}
-                            {Array.isArray(r.completedMonths) &&
-                              r.completedMonths.length > 0 && (
-                              <p>
-                                Meses ok: {r.completedMonths.length}{" "}
-                                ({String(r.completedMonths[0])}
-                                {r.completedMonths.length > 1 ? " … " + String(r.completedMonths[r.completedMonths.length - 1]) : ""})
-                              </p>
-                            )}
-                            {Array.isArray(r.failedMonths) &&
-                              r.failedMonths.length > 0 && (
-                              <div className="text-destructive">
-                                <p className="font-medium">
-                                  Meses fallidos ({r.failedMonths.length}):
-                                </p>
-                                <ul className="list-disc list-inside mt-0.5">
-                                  {(r.failedMonths as Array<{ ym?: string; error?: string }>).map(
-                                    (f, i) => (
-                                      <li key={i}>
-                                        {f.ym ?? String(f)}: {(f as { error?: string }).error ?? ""}
-                                      </li>
-                                    )
-                                  )}
-                                </ul>
-                              </div>
-                            )}
-                          </div>
-                        )}
-                        <pre className="text-xs overflow-auto bg-slate-800/50 p-2 rounded mt-1 max-h-[200px] border border-slate-700/50">
-                          {JSON.stringify(selectedPipelineJob.result, null, 2)}
-                        </pre>
-                      </>
-                    );
-                  })()}
-                </div>
-              )}
-              {selectedPipelineJob.errorMessage && (
-                <p className="whitespace-pre-wrap break-words">
-                  <span className="text-destructive">Error:</span>{" "}
-                  {formatErrorMessage(selectedPipelineJob.errorMessage)}
-                </p>
-              )}
-              <p>
-                <span className="text-muted-foreground">Inicio:</span>{" "}
-                {new Date(selectedPipelineJob.startedAt).toLocaleString()}
-              </p>
-              {selectedPipelineJob.completedAt && (
-                <p>
-                  <span className="text-muted-foreground">Fin:</span>{" "}
-                  {new Date(selectedPipelineJob.completedAt).toLocaleString()}
-                </p>
-              )}
-            </div>
-          ) : (
-            <p className="text-muted-foreground">Cargando...</p>
-          )}
-          <DialogFooter className="shrink-0">
-            <Button
-              variant="outline"
-              onClick={() => setSelectedJobId(null)}
-              size="sm"
-            >
-              Cerrar
             </Button>
           </DialogFooter>
         </DialogContent>

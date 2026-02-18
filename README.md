@@ -55,7 +55,7 @@ reconciliation/
 ├── src/                 # App Next.js
 │   ├── app/
 │   │   ├── page.tsx     # Dashboard principal Enero
-│   │   ├── upload/      # Gestión de datos, sync
+│   │   ├── configuracion/  # Configuración: datos, carga fuentes, agregaciones, status
 │   │   ├── v1/          # Dashboard V1 legacy
 │   │   └── api/
 │   │       ├── v1/payments-by-day/
@@ -150,7 +150,7 @@ El mismo patrón se aplica a enriquecimientos, agregaciones y reconciliaciones. 
 - [cloudwatch-queries.md](cloudwatch-queries.md) – Queries CloudWatch para V1, V2 y PaymentProcess
 - [reconciliation-dynamodb.md](reconciliation-dynamodb.md) – Reconciliación CloudWatch vs DynamoDB (datamapping)
 - [datamapping-aggregations.md](datamapping-aggregations.md) – Análisis Mensual y Anual desde DataMapping (tablas agregadas)
-- [docs/jobs-page.md](docs/jobs-page.md) – Página Jobs: centralización de pipelines (sync CloudWatch, carga DynamoDB, agregados, enriquecimiento RFC, backfill)
+- [docs/jobs-page.md](docs/jobs-page.md) – Configuración: Gestión de datos, Carga de fuentes, Enriquecimiento y agregaciones, Status de actualizaciones (pipelines, sync CloudWatch, carga DynamoDB, agregados, backfill)
 - [docs/inngest-setup.md](docs/inngest-setup.md) – Configuración básica de Inngest
 - [docs/production-setup.md](docs/production-setup.md) – **Puesta en producción**: Vercel, Convex (prod) e Inngest
 - [convex/README.md](convex/README.md) – Funciones Convex del proyecto

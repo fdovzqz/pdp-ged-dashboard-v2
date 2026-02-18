@@ -12,6 +12,14 @@ import { datamappingFechaTransaccionFromDate } from "@/inngest/datamapping-fecha
 import { pipelineJobCancelledHandler } from "@/inngest/pipeline-job-cancelled-handler";
 
 /**
+ * Límite de ejecución por invocación en Vercel (segundos).
+ * Por defecto Vercel usa 300s (5 min); en plan Pro se puede subir hasta 800.
+ * Los steps pesados (p. ej. meses grandes en datamapping full-history) subdividen
+ * por rangos de días para no superar este límite.
+ */
+export const maxDuration = 300;
+
+/**
  * Ruta requerida por Inngest para registrar funciones e invocarlas.
  * GET: descubrimiento de la app por el Inngest Dev Server.
  * POST/PUT: ejecución de funciones.

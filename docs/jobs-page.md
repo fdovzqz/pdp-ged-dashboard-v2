@@ -1,15 +1,16 @@
-# Página Jobs y modelo pipelineJobs
+# Configuración y modelo pipelineJobs
 
-Centralización de todos los jobs de extracción, ingesta, agregación y enriquecimiento en una única página **Jobs** (`/jobs`), con estado persistido en Convex.
+Toda la configuración de datos, cargas, jobs, enriquecimiento y agregaciones está bajo **Configuración** (`/configuracion`), con cuatro subpáginas. El estado de los jobs se persiste en Convex.
 
 Las **cargas masivas** (histórico datamapping, y en el futuro enriquecimientos, agregaciones, reconciliaciones) siguen el [patrón documentado en mass-loads-inngest-pattern.md](mass-loads-inngest-pattern.md): un step por unidad (p. ej. mes), ejecución en paralelo, reintentos por step, resultado con `completedMonths` / `failedMonths` para saber qué terminó bien y en qué enfocarse.
+
+**Redirects**: `/upload` → `/configuracion/datos`, `/jobs` → `/configuracion/status`.
 
 ---
 
 ## Objetivo
 
-- **Página Jobs**: concentrar disparadores, estado, progreso, reintentos y resultados de todos los pipelines.
-- **Página Datos**: dejar solo la vista de registros cargados, configuración de códigos/aliases y operaciones de borrado de datos.
+- **Configuración**: una entrada en el nav con subpáginas para Gestión de datos, Carga de fuentes, Enriquecimiento y agregaciones, Status de actualizaciones.
 - **Estado persistido**: los jobs sobreviven al refrescar la página (Convex).
 
 ---
@@ -18,33 +19,36 @@ Las **cargas masivas** (histórico datamapping, y en el futuro enriquecimientos,
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│ Página Jobs (/jobs)                                              │
+│ Configuración (/configuracion)                                   │
 ├─────────────────────────────────────────────────────────────────┤
-│ 1. Pipeline Jobs     → listPipelineJobs, getPipelineJob          │
-│ 2. Sync CloudWatch   → fetchAndIngestForDate                     │
-│ 3. Agregados CW      → buildJanuaryAggregates                    │
-│ 4. Carga DynamoDB    → fetchDatamappingAndIngest, ForDayChunk (Inngest), delete │
-│ 5. Agregados DM      → buildDatamappingAggregates                │
-│ 6. Enriquecimiento   → enrichDatamappingWithRfc, runs + Continuar│
-│ 7. Backfill RFC      → backfillDatamappingRfcExtracted + runs    │
-└─────────────────────────────────────────────────────────────────┘
-
-┌─────────────────────────────────────────────────────────────────┐
-│ Página Datos (/upload)                                           │
+│ Gestión de datos (/configuracion/datos)                         │
+│   - IngestionStatus (registros por mes/día)                      │
+│   - Borrar mes / Borrar todo                                     │
+│   - Códigos de movimiento (CRUD)                                 │
+│   - Aliases de movimiento (CRUD)                                  │
 ├─────────────────────────────────────────────────────────────────┤
-│ - IngestionStatus (registros por mes/día)                        │
-│ - Borrar mes / Borrar todo                                       │
-│ - Códigos de movimiento (CRUD)                                   │
-│ - Aliases de movimiento (CRUD)                                   │
-│ - Enlace a Jobs                                                  │
+│ Carga de fuentes (/configuracion/carga-fuentes)                  │
+│   - Sync CloudWatch   → fetchAndIngestForDate                    │
+│   - Carga DynamoDB    → full history, re-extraer, incremental,   │
+│                         load from date, backfill fechaTransaccion,│
+│                         clear (Inngest)                          │
+├─────────────────────────────────────────────────────────────────┤
+│ Enriquecimiento y agregaciones (/configuracion/enriquecimiento-agregaciones) │
+│   - Enriquecimiento (texto: en la carga)                         │
+│   - Agregados DM      → buildDatamappingAggregates               │
+│   - Agregados CW      → buildJanuaryAggregates                    │
+├─────────────────────────────────────────────────────────────────┤
+│ Status de actualizaciones (/configuracion/status)                │
+│   - Marca de agua datamapping                                     │
+│   - Pipeline Jobs     → listPipelineJobs, getPipelineJob          │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
 ---
 
-## Página Jobs: secciones
+## Subpáginas: detalle
 
-### 1. Pipeline Jobs
+### Status de actualizaciones: Pipeline Jobs
 
 Tabla paginada de jobs registrados en la tabla `pipelineJobs`. Muestra:
 

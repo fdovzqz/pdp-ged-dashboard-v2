@@ -21,6 +21,12 @@ if (fs.existsSync(envPath)) {
 
 const nextConfig: NextConfig = {
   reactCompiler: true,
+  async redirects() {
+    return [
+      { source: "/upload", destination: "/configuracion/datos", permanent: true },
+      { source: "/jobs", destination: "/configuracion/status", permanent: true },
+    ];
+  },
   ...(convexUrl && {
     env: {
       NEXT_PUBLIC_CONVEX_URL: convexUrl,

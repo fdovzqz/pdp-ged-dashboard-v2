@@ -205,7 +205,7 @@ export default function RfcReferenciasPage(): React.ReactElement {
               Rango: 1 de enero a la fecha. Los resultados se guardan en la tabla{" "}
               <code className="text-xs bg-muted px-1 rounded">rfcInvestigationResults</code>.
               Requiere enriquecimiento previo en{" "}
-              <Link href="/upload" className="text-emerald-400 hover:text-emerald-300 underline">
+              <Link href="/configuracion/datos" className="text-emerald-400 hover:text-emerald-300 underline">
                 Datos
               </Link>
               .
