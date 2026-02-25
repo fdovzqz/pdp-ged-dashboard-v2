@@ -3,6 +3,7 @@ import { Geist, Geist_Mono } from "next/font/google";
 import { ConvexClientProvider } from "@/providers/ConvexClientProvider";
 import { Nav } from "@/components/Nav";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
+import { PerformanceMeasurePatch } from "@/components/PerformanceMeasurePatch";
 import "./globals.css";
 
 const geistSans = Geist({
@@ -39,6 +40,7 @@ export default function RootLayout({
         suppressHydrationWarning
       >
         <ConvexClientProvider>
+          <PerformanceMeasurePatch />
           <ErrorBoundary>
             <Nav />
             {children}

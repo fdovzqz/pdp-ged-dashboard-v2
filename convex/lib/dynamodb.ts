@@ -8,9 +8,19 @@ import {
 } from "@aws-sdk/client-dynamodb";
 import { unmarshall } from "@aws-sdk/util-dynamodb";
 
-const DATAMAPPING_INDEX = "DateIndex";
+/** Nombre del GSI en la tabla DynamoDB (partition: syncGroup, sort: updatedAt). Por defecto "DateIndex"; si tu tabla usa otro nombre, setea DYNAMODB_DATAMAPPING_INDEX en Convex. */
+function getDatamappingIndexName(): string {
+  return process.env.DYNAMODB_DATAMAPPING_INDEX || "DateIndex";
+}
+
 const SYNC_GROUP = 1;
 
+/**
+ * Región usada para DynamoDB. Debe ser la misma donde está la tabla con el GSI DateIndex.
+ * Si solo una unidad falla con "table does not have the specified index" y el índice existe:
+ * - Comprueba que AWS_REGION en Convex coincida con la región de la tabla en la consola AWS.
+ * - A veces AWS devuelve ese error de forma transitoria; por eso reintentamos en las queries.
+ */
 function getDynamoClient(): DynamoDBClient {
   return new DynamoDBClient({
     region: process.env.AWS_REGION || "us-east-1",
@@ -34,14 +44,45 @@ function getTableName(): string {
 /** Tamaño de página por llamada (evita timeout de 600s). */
 const DATAMAPPING_PAGE_LIMIT = 1000;
 
+function sleepMs(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+/** Reintenta la query hasta 3 veces si AWS devuelve ValidationException (a veces transitorio). */
+async function queryWithRetry(
+  client: DynamoDBClient,
+  command: QueryCommand
+): Promise<QueryCommandOutput> {
+  const maxAttempts = 3;
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      return await client.send(command);
+    } catch (err) {
+      const isValidation =
+        err != null &&
+        typeof err === "object" &&
+        "name" in err &&
+        (err as { name?: string }).name === "ValidationException";
+      if (isValidation && attempt < maxAttempts) {
+        await sleepMs(attempt * 1000);
+        continue;
+      }
+      throw err;
+    }
+  }
+  throw new Error("queryWithRetry: unreachable");
+}
+
 /**
  * Una página de DynamoDB GSI DateIndex. Para carga progresiva sin exceder 600s.
- * @param sinceDate - e.g. "2026-01-01"
+ * @param sinceDate - e.g. "2026-01-01" o "2026-01-01T00:00:00.000Z"
  * @param exclusiveStartKey - LastEvaluatedKey serializado (JSON) de la llamada anterior
+ * @param toDate - opcional; si se pasa (YYYY-MM-DD), restringe a updatedAt <= toDate 23:59:59 (rango cerrado por día)
  */
 export async function queryDatamappingPage(
   sinceDate: string,
-  exclusiveStartKey?: string
+  exclusiveStartKey?: string,
+  toDate?: string
 ): Promise<{
   items: Record<string, unknown>[];
   lastEvaluatedKey: string | null;
@@ -56,15 +97,27 @@ export async function queryDatamappingPage(
       lastKey = undefined;
     }
   }
+  const dtFrom = sinceDate.includes("T") ? sinceDate : `${sinceDate}T00:00:00.000Z`;
+  const useRange = toDate != null && toDate.length >= 10;
+  const dtTo = useRange ? `${toDate!.slice(0, 10)}T23:59:59.999Z` : undefined;
+
   const response: QueryCommandOutput = await client.send(
     new QueryCommand({
       TableName: tableName,
-      IndexName: DATAMAPPING_INDEX,
-      KeyConditionExpression: "syncGroup = :sg AND updatedAt > :dt",
-      ExpressionAttributeValues: {
-        ":sg": { S: String(SYNC_GROUP) },
-        ":dt": { S: sinceDate },
-      },
+      IndexName: getDatamappingIndexName(),
+      KeyConditionExpression: useRange
+        ? "syncGroup = :sg AND updatedAt BETWEEN :dtFrom AND :dtTo"
+        : "syncGroup = :sg AND updatedAt > :dtFrom",
+      ExpressionAttributeValues: useRange
+        ? {
+            ":sg": { S: String(SYNC_GROUP) },
+            ":dtFrom": { S: dtFrom },
+            ":dtTo": { S: dtTo! },
+          }
+        : {
+            ":sg": { S: String(SYNC_GROUP) },
+            ":dtFrom": { S: dtFrom },
+          },
       Limit: DATAMAPPING_PAGE_LIMIT,
       ExclusiveStartKey: lastKey,
     })
@@ -94,7 +147,7 @@ export async function* queryDatamappingPagoValidadoSince(
     const response: QueryCommandOutput = await client.send(
       new QueryCommand({
         TableName: tableName,
-        IndexName: DATAMAPPING_INDEX,
+        IndexName: getDatamappingIndexName(),
         KeyConditionExpression: "syncGroup = :sg AND updatedAt > :dt",
         ExpressionAttributeValues: {
           ":sg": { S: String(SYNC_GROUP) },
@@ -148,10 +201,11 @@ export async function queryDatamappingPageForDay(
       lastKey = undefined;
     }
   }
-  const response: QueryCommandOutput = await client.send(
+  const response: QueryCommandOutput = await queryWithRetry(
+    client,
     new QueryCommand({
       TableName: tableName,
-      IndexName: DATAMAPPING_INDEX,
+      IndexName: getDatamappingIndexName(),
       KeyConditionExpression:
         "syncGroup = :sg AND updatedAt BETWEEN :dtStart AND :dtEnd",
       ExpressionAttributeValues: {
@@ -173,7 +227,7 @@ export async function queryDatamappingPageForDay(
 }
 
 /**
- * Query DynamoDB GSI DateIndex para un solo día: syncGroup=1, updatedAt en [start, end).
+ * Query DynamoDB GSI para un solo día: syncGroup=1, updatedAt en [start, end).
  * Extrae todos los registros (sin filtrar por status).
  */
 export async function* queryDatamappingPagoValidadoForDay(
@@ -190,7 +244,7 @@ export async function* queryDatamappingPagoValidadoForDay(
     const response: QueryCommandOutput = await client.send(
       new QueryCommand({
         TableName: tableName,
-        IndexName: DATAMAPPING_INDEX,
+        IndexName: getDatamappingIndexName(),
         KeyConditionExpression:
           "syncGroup = :sg AND updatedAt BETWEEN :dtStart AND :dtEnd",
         ExpressionAttributeValues: {
@@ -246,10 +300,11 @@ export async function queryDatamappingPageForMonth(
       lastKey = undefined;
     }
   }
-  const response: QueryCommandOutput = await client.send(
+  const response: QueryCommandOutput = await queryWithRetry(
+    client,
     new QueryCommand({
       TableName: tableName,
-      IndexName: DATAMAPPING_INDEX,
+      IndexName: getDatamappingIndexName(),
       KeyConditionExpression:
         "syncGroup = :sg AND updatedAt BETWEEN :dtStart AND :dtEnd",
       ExpressionAttributeValues: {
@@ -614,7 +669,7 @@ export async function listFirstItemAttributes(
   const response = await client.send(
     new QueryCommand({
       TableName: tableName,
-      IndexName: DATAMAPPING_INDEX,
+      IndexName: getDatamappingIndexName(),
       KeyConditionExpression: "syncGroup = :sg AND updatedAt > :dt",
       ExpressionAttributeValues: {
         ":sg": { S: String(SYNC_GROUP) },

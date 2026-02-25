@@ -385,6 +385,47 @@ export default defineSchema({
     ),
   }).index("by_runAt", ["runAt"]),
 
+  /** Conteo agregado de datamappingRecords (total, PAGO VALIDADO, PAGO VALIDADO-DEC). Comparación: CloudWatch vs totalPagoValidadoDec. */
+  datamappingIngestionStats: defineTable({
+    total: v.number(),
+    totalPagoValidado: v.optional(v.number()),
+    totalPagoValidadoDec: v.optional(v.number()),
+    byYear: v.array(v.object({ year: v.string(), count: v.number() })),
+    byYearPagoValidado: v.optional(v.array(v.object({ year: v.string(), count: v.number() }))),
+    byYearPagoValidadoDec: v.optional(v.array(v.object({ year: v.string(), count: v.number() }))),
+    byMonth: v.array(v.object({ month: v.string(), count: v.number() })),
+    byMonthPagoValidado: v.optional(v.array(v.object({ month: v.string(), count: v.number() }))),
+    byMonthPagoValidadoDec: v.optional(v.array(v.object({ month: v.string(), count: v.number() }))),
+    byDay: v.array(v.object({ date: v.string(), count: v.number() })),
+    byDayPagoValidado: v.optional(v.array(v.object({ date: v.string(), count: v.number() }))),
+    byDayPagoValidadoDec: v.optional(v.array(v.object({ date: v.string(), count: v.number() }))),
+    lastUpdated: v.number(),
+  }),
+
+  /** Estadísticas de ingestión por mes (datamappingRecords). totalRecordsPagoValidadoDec = comparar con paymentRecords. */
+  datamappingMonthStats: defineTable({
+    month: v.string(),
+    totalRecords: v.number(),
+    totalRecordsPagoValidado: v.optional(v.number()),
+    totalRecordsPagoValidadoDec: v.optional(v.number()),
+    daysWithData: v.number(),
+    byDate: v.array(v.object({ date: v.string(), count: v.number() })),
+    lastUpdated: v.number(),
+  }).index("by_month", ["month"]),
+
+  /** Igual que datamappingMonthStats pero agrupado por fechaTransaccionMexico (mes del pago). Usado para comparación con paymentRecords (mes del pago). */
+  datamappingMonthStatsByFechaTransaccion: defineTable({
+    month: v.string(),
+    totalRecords: v.number(),
+    totalRecordsPagoValidado: v.optional(v.number()),
+    totalRecordsPagoValidadoDec: v.optional(v.number()),
+    daysWithData: v.number(),
+    byDate: v.array(v.object({ date: v.string(), count: v.number() })),
+    /** Por día: cuenta de PAGO VALIDADO con fuente DEC. Permite mostrar DEC y PV−DEC diarios al recalcular. */
+    byDatePagoValidadoDec: v.optional(v.array(v.object({ date: v.string(), count: v.number() }))),
+    lastUpdated: v.number(),
+  }).index("by_month", ["month"]),
+
   /** Jobs de pipeline: estado, progreso, resultado; para extracciones async, progreso visible tras refresh. */
   pipelineJobs: defineTable({
     jobType: v.string(),
@@ -412,10 +453,156 @@ export default defineSchema({
     parentJobId: v.optional(v.id("pipelineJobs")),
     externalId: v.optional(v.string()),
     retryCount: v.optional(v.number()),
+    /** Límite de unidades en paralelo para jobs paralelos; si no se setea se usa default (6). */
+    maxConcurrency: v.optional(v.number()),
   })
     .index("by_startedAt", ["startedAt"])
     .index("by_status", ["status"])
     .index("by_jobType", ["jobType"]),
+
+  /** Unidades de trabajo de un pipeline job; cola para el motor Convex. */
+  pipelineJobUnits: defineTable({
+    jobId: v.id("pipelineJobs"),
+    unitId: v.string(),
+    payload: v.any(),
+    status: v.union(
+      v.literal("pending"),
+      v.literal("running"),
+      v.literal("completed"),
+      v.literal("failed")
+    ),
+    result: v.optional(v.any()),
+    sortOrder: v.number(),
+    /** Timestamp cuando se marcó running; para detectar unidades atascadas. */
+    startedAt: v.optional(v.number()),
+    /** Progreso parcial mientras la unidad está running (ej. enriquecimiento: processed, enriched; fechaTransaccion: processed, updated). */
+    progressDetail: v.optional(
+      v.object({
+        processed: v.number(),
+        enriched: v.optional(v.number()),
+        updated: v.optional(v.number()),
+      })
+    ),
+  })
+    .index("by_jobId", ["jobId"])
+    .index("by_jobId_status", ["jobId", "status"]),
+
+  /** Rule sets versionados por dominio (dedup, reconciliation, enrichment). Engine aplica reglas declarativas. */
+  ruleSets: defineTable({
+    ruleSetKey: v.string(),
+    domain: v.union(
+      v.literal("dedup"),
+      v.literal("reconciliation"),
+      v.literal("enrichment"),
+      v.literal("clean"),
+      v.literal("quality")
+    ),
+    version: v.string(),
+    rules: v.any(),
+    activationPolicy: v.optional(v.union(v.literal("default"), v.literal("opt_in"))),
+    sourceKey: v.optional(v.string()),
+    createdAt: v.number(),
+    createdBy: v.optional(v.string()),
+  })
+    .index("by_ruleSetKey_version", ["ruleSetKey", "version"])
+    .index("by_domain_source", ["domain", "sourceKey"])
+    .index("by_domain_createdAt", ["domain", "createdAt"])
+    .index("by_domain_source_createdAt", ["domain", "sourceKey", "createdAt"])
+    .index("by_createdAt", ["createdAt"]),
+
+  /** Eventos de auditoría por corrida/step/unit. Trazabilidad input-proceso-output. */
+  auditEvents: defineTable({
+    jobId: v.id("pipelineJobs"),
+    eventType: v.string(),
+    stepKey: v.optional(v.string()),
+    unitKey: v.optional(v.string()),
+    timestamp: v.number(),
+    payloadSummary: v.optional(v.any()),
+    resultSummary: v.optional(v.any()),
+    errorCategory: v.optional(v.string()),
+  }).index("by_jobId_timestamp", ["jobId", "timestamp"]),
+
+  /** Copia fiel por fuente CloudWatch (determinístico). Una tabla por fuente para idempotencia y consolidación posterior. */
+  cloudwatchSourceV1: defineTable({
+    importDate: v.string(),
+    importMonth: v.string(),
+    logSource: v.literal("v1"),
+    timestamp: v.string(),
+    referencia: v.string(),
+    monto: v.number(),
+    fechaTransaccion: v.string(),
+    estatus: v.string(),
+    movimiento: v.string(),
+    tramiteId: v.optional(v.number()),
+    rawData: v.optional(v.string()),
+  })
+    .index("by_importDate", ["importDate"])
+    .index("by_importMonth", ["importMonth"])
+    .index("by_referencia", ["referencia"]),
+
+  cloudwatchSourceV2: defineTable({
+    importDate: v.string(),
+    importMonth: v.string(),
+    logSource: v.literal("v2"),
+    timestamp: v.string(),
+    referencia: v.string(),
+    monto: v.number(),
+    fechaTransaccion: v.string(),
+    estatus: v.string(),
+    movimiento: v.string(),
+    tramiteId: v.optional(v.number()),
+    rawData: v.optional(v.string()),
+  })
+    .index("by_importDate", ["importDate"])
+    .index("by_importMonth", ["importMonth"])
+    .index("by_referencia", ["referencia"]),
+
+  cloudwatchSourcePayment: defineTable({
+    importDate: v.string(),
+    importMonth: v.string(),
+    logSource: v.literal("payment"),
+    timestamp: v.string(),
+    referencia: v.string(),
+    monto: v.number(),
+    fechaTransaccion: v.string(),
+    estatus: v.string(),
+    movimiento: v.string(),
+    tramiteId: v.optional(v.number()),
+    rawData: v.optional(v.string()),
+  })
+    .index("by_importDate", ["importDate"])
+    .index("by_importMonth", ["importMonth"])
+    .index("by_referencia", ["referencia"]),
+
+  /** Auditoría de ingestión CloudWatch por día: filas por etapa para diagnosticar pérdidas. */
+  cloudwatchIngestionAudit: defineTable({
+    date: v.string(),
+    rawBySource: v.object({
+      v1: v.number(),
+      v2: v.number(),
+      payment: v.number(),
+    }),
+    parsedBySource: v.object({
+      v1: v.number(),
+      v2: v.number(),
+      payment: v.number(),
+    }),
+    refsKeptBySource: v.object({
+      v1: v.number(),
+      v2: v.number(),
+      payment: v.number(),
+    }),
+    refsDiscardedBySource: v.object({
+      v1: v.number(),
+      v2: v.number(),
+      payment: v.number(),
+    }),
+    deleted: v.number(),
+    inserted: v.number(),
+    skipped: v.number(),
+    truncationRisk: v.boolean(),
+    recordedAt: v.number(),
+  }).index("by_date", ["date"]),
 
   /** Errores/diferencias de reconciliación; se borran al re-ejecutar. kind: onlyCw | onlyDdb | mismatch | monthMismatch */
   reconciliationErrors: defineTable({

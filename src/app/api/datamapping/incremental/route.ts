@@ -1,14 +1,26 @@
 import { NextResponse } from "next/server";
-import { inngest } from "@/inngest/client";
+import { ConvexHttpClient } from "convex/browser";
+import { api } from "convex/_generated/api";
+import type { Id } from "convex/_generated/dataModel";
 
-/** POST: dispara extracción incremental (marca de agua) vía Inngest. Cron cada 5 min también. */
+function getConvexUrl(): string {
+  const url = process.env.NEXT_PUBLIC_CONVEX_URL;
+  if (!url) throw new Error("NEXT_PUBLIC_CONVEX_URL is not set");
+  return url;
+}
+
+/** POST: crea un pipeline job y arranca extracción incremental (marca de agua) en Convex. */
 export async function POST(): Promise<NextResponse> {
   try {
-    await inngest.send({
-      name: "reconciliation/datamapping.incremental",
-      data: {},
-    });
-    return NextResponse.json({ ok: true });
+    const client = new ConvexHttpClient(getConvexUrl());
+    const jobId = (await client.mutation(api.pipelineMutations.createPipelineJob, {
+      jobType: "datamapping_incremental",
+      scope: {},
+    })) as Id<"pipelineJobs">;
+
+    await client.mutation(api.pipelineMutations.startPipelineJob, { jobId });
+
+    return NextResponse.json({ ok: true, jobId });
   } catch (err) {
     console.error("[datamapping/incremental]", err);
     return NextResponse.json(

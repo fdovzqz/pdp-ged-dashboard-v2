@@ -37,7 +37,7 @@ export default function ChequeoDuplicadosPage(): React.ReactElement {
   const [selectedMonth, setSelectedMonth] = useState("2026-01");
 
   const checkDuplicateReferencias = useAction(api.actions.checkDuplicateReferencias);
-  const monthResult = useQuery(api.queries.findDuplicateReferenciasInMonth, {
+  const monthResult = useQuery(api.cloudwatchQueries.findDuplicateReferenciasInMonth, {
     month: selectedMonth,
   });
 
@@ -63,7 +63,7 @@ export default function ChequeoDuplicadosPage(): React.ReactElement {
 
   return (
     <div className="p-6 md:p-8">
-      <div className="max-w-4xl mx-auto space-y-6">
+      <div className="max-w-6xl mx-auto space-y-6">
         <div>
           <h1 className="text-2xl font-semibold tracking-tight flex items-center gap-2">
             <CopyCheck className="size-6" />
@@ -174,6 +174,11 @@ export default function ChequeoDuplicadosPage(): React.ReactElement {
             </div>
             {monthResult && (
               <div className="space-y-2 text-sm">
+                {monthResult.truncated && (
+                  <p className="text-amber-400">
+                    Resultado parcial: el mes tiene más de 30 000 registros; se analizaron solo los primeros 30 000.
+                  </p>
+                )}
                 <p>
                   Total registros: <strong>{monthResult.totalRecords.toLocaleString()}</strong>
                   {" · "}

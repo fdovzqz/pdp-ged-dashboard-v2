@@ -115,7 +115,7 @@ export default function GestionDatosPage(): React.ReactElement {
 
   return (
     <div className="p-6 md:p-8" suppressHydrationWarning>
-      <div className="max-w-2xl mx-auto space-y-8">
+      <div className="max-w-6xl mx-auto space-y-8">
         <div>
           <h1 className="text-3xl font-bold tracking-tight font-space-grotesk gradient-text-emerald">
             Gestión de datos

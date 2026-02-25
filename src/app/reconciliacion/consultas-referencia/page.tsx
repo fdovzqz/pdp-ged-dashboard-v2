@@ -16,13 +16,16 @@ import { Search } from "lucide-react";
 export default function ConsultasReferenciaPage(): React.ReactElement {
   const [inputValue, setInputValue] = useState("");
   const [submittedRef, setSubmittedRef] = useState<string | null>(null);
-  const investigation = useQuery(api.queries.investigateReferenciaReconciliation, {
+  const investigation = useQuery(api.reconciliationQueries.investigateReferenciaReconciliation, {
+    referencia: submittedRef ?? "",
+  });
+  const paymentRecordsByRef = useQuery(api.cloudwatchQueries.searchByReferencia, {
     referencia: submittedRef ?? "",
   });
 
   return (
     <div className="p-6 md:p-8">
-      <div className="max-w-2xl mx-auto space-y-6">
+      <div className="max-w-6xl mx-auto space-y-6">
         <div>
           <h1 className="text-2xl font-semibold tracking-tight flex items-center gap-2">
             <Search className="size-6" />
@@ -104,6 +107,61 @@ export default function ConsultasReferenciaPage(): React.ReactElement {
                   </div>
                 )}
               </div>
+            )}
+
+            {submittedRef != null && submittedRef !== "" && (
+              <Card className="border-slate-700/50 bg-slate-900/30 mt-4">
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-base">Registros en paymentRecords (CloudWatch)</CardTitle>
+                  <CardDescription>
+                    Todos los registros con referencia igual a{" "}
+                    <span className="font-mono text-foreground">{submittedRef}</span>
+                  </CardDescription>
+                </CardHeader>
+                <CardContent>
+                  {paymentRecordsByRef === undefined ? (
+                    <p className="text-sm text-muted-foreground">Cargando…</p>
+                  ) : paymentRecordsByRef.length === 0 ? (
+                    <p className="text-sm text-muted-foreground">Ningún registro en paymentRecords con esta referencia.</p>
+                  ) : (
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-xs font-mono border-collapse">
+                        <thead>
+                          <tr className="border-b border-slate-600 text-left">
+                            <th className="py-1.5 pr-2">referencia</th>
+                            <th className="py-1.5 pr-2">monto</th>
+                            <th className="py-1.5 pr-2">timestamp</th>
+                            <th className="py-1.5 pr-2">fechaTransaccion</th>
+                            <th className="py-1.5 pr-2">logSource</th>
+                            <th className="py-1.5 pr-2">movimiento</th>
+                            <th className="py-1.5 pr-2">estatus</th>
+                            <th className="py-1.5 pr-2">importMonth</th>
+                            <th className="py-1.5 pr-2">importDate</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {paymentRecordsByRef.map((r, i) => (
+                            <tr key={i} className="border-b border-slate-700/50">
+                              <td className="py-1 pr-2">{r.referencia}</td>
+                              <td className="py-1 pr-2">{r.monto}</td>
+                              <td className="py-1 pr-2">{r.timestamp}</td>
+                              <td className="py-1 pr-2">{r.fechaTransaccion}</td>
+                              <td className="py-1 pr-2">{r.logSource}</td>
+                              <td className="py-1 pr-2">{r.movimiento}</td>
+                              <td className="py-1 pr-2">{r.estatus}</td>
+                              <td className="py-1 pr-2">{r.importMonth}</td>
+                              <td className="py-1 pr-2">{r.importDate ?? "—"}</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                      <p className="text-muted-foreground text-xs mt-2">
+                        Total: {paymentRecordsByRef.length} registro(s)
+                      </p>
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
             )}
           </CardContent>
         </Card>

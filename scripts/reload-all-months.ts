@@ -78,7 +78,7 @@ for (const month of monthRange(startArg, endArg)) {
     { stdio: "inherit" }
   );
   execSync(
-    `npx convex run januaryETL:buildJanuaryAggregates '{"months":["${month}"]}'`,
+    `npx convex run aggregatesCloudwatchETL:buildCloudwatchAggregates '{"months":["${month}"]}'`,
     { stdio: "pipe", encoding: "utf-8" }
   );
 }

@@ -41,7 +41,7 @@ export default function StatusActualizacionesPage(): React.ReactElement {
   const convex = useConvex();
   useEffect(() => {
     let cancelled = false;
-    convex.query(api.queries.getDatamappingWatermark).then((value) => {
+    convex.query(api.datamappingQueries.getDatamappingWatermark).then((value) => {
       if (!cancelled) setDatamappingWatermark(value);
     });
     return () => {
@@ -50,7 +50,7 @@ export default function StatusActualizacionesPage(): React.ReactElement {
   }, [convex]);
 
   const pipelineJobsResult = useQuery(
-    api.pipelineJobs.listPipelineJobs,
+    api.pipelineQueries.listPipelineJobs,
     {
       paginationOpts: {
         numItems: 50,
@@ -60,7 +60,7 @@ export default function StatusActualizacionesPage(): React.ReactElement {
     }
   );
   const selectedPipelineJob = useQuery(
-    api.pipelineJobs.getPipelineJob,
+    api.pipelineQueries.getPipelineJob,
     selectedJobId ? { jobId: selectedJobId } : "skip"
   );
 
@@ -71,7 +71,7 @@ export default function StatusActualizacionesPage(): React.ReactElement {
 
   return (
     <div className="p-6 md:p-8" suppressHydrationWarning>
-      <div className="max-w-2xl mx-auto space-y-8">
+      <div className="max-w-6xl mx-auto space-y-8">
         <div>
           <h1 className="text-3xl font-bold tracking-tight font-space-grotesk gradient-text-emerald flex items-center gap-2">
             <Activity className="size-8" />

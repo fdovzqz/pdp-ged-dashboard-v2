@@ -116,7 +116,7 @@ function formatScopeLabel(scopeId: string): string {
 export default function DiferenciasFuentesPage(): React.ReactElement {
   const convex = useConvex();
   const runReconciliationAction = useAction(api.actions.runReconciliation);
-  const summary = useQuery(api.queries.getReconciliationSummaryJanuary2026);
+  const summary = useQuery(api.reconciliationQueries.getReconciliationSummary);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [selectedKind, setSelectedKind] = useState<ErrorKind | null>(null);
@@ -144,7 +144,7 @@ export default function DiferenciasFuentesPage(): React.ReactElement {
         let res: { page: Doc<"reconciliationErrors">[]; isDone: boolean; continueCursor: string | null };
         do {
           res = await convex.query(
-            api.queries.getReconciliationErrorsPage,
+            api.reconciliationQueries.getReconciliationErrorsPage,
             { kind, cursor, numItems: 2000 }
           );
           all.push(...res.page);
@@ -160,7 +160,7 @@ export default function DiferenciasFuentesPage(): React.ReactElement {
           for (let i = 0; i < all.length; i += CHUNK) {
             const chunk = all.slice(i, i + CHUNK).map((r) => r.referencia);
             const part = await convex.query(
-              api.queries.getPaymentRecordsMonthsForReferencias,
+              api.cloudwatchQueries.getPaymentRecordsMonthsForReferencias,
               { referencias: chunk }
             );
             Object.assign(opts.paymentMonthsByRef, part);
@@ -171,7 +171,7 @@ export default function DiferenciasFuentesPage(): React.ReactElement {
           for (let i = 0; i < all.length; i += CHUNK) {
             const chunk = all.slice(i, i + CHUNK).map((r) => r.referencia);
             const part = await convex.query(
-              api.queries.getDatamappingMonthsForReferencias,
+              api.datamappingQueries.getDatamappingMonthsForReferencias,
               { referencias: chunk }
             );
             Object.assign(opts.datamappingMonthsByRef, part);
@@ -589,10 +589,10 @@ function ReconciliationErrorsDetail({
   const hadMonthFilterRef = useRef(false);
   const getCountsByMonth = useAction(api.actions.getReconciliationErrorsCountByMonth);
   const onlyCwWithPayment = useQuery(
-    api.queries.getReconciliationErrorsOnlyCwWithPayment,
+    api.reconciliationQueries.getReconciliationErrorsOnlyCwWithPayment,
     kind === "onlyCw" ? {} : "skip"
   );
-  const page = useQuery(api.queries.getReconciliationErrorsPage, {
+  const page = useQuery(api.reconciliationQueries.getReconciliationErrorsPage, {
     kind,
     cursor,
     numItems: 100,
@@ -645,13 +645,13 @@ function ReconciliationErrorsDetail({
       ? displayRows.slice(0, MAX_REFERENCIAS_QUERY).map((r) => r.referencia)
       : [];
   const paymentMonthsByRef = useQuery(
-    api.queries.getPaymentRecordsMonthsForReferencias,
+    api.cloudwatchQueries.getPaymentRecordsMonthsForReferencias,
     referenciasForPaymentLookup.length > 0
       ? { referencias: referenciasForPaymentLookup }
       : "skip"
   );
   const datamappingMonthsByRef = useQuery(
-    api.queries.getDatamappingMonthsForReferencias,
+    api.datamappingQueries.getDatamappingMonthsForReferencias,
     referenciasForDatamappingLookup.length > 0
       ? { referencias: referenciasForDatamappingLookup }
       : "skip"

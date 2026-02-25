@@ -145,7 +145,7 @@ function formatRunAt(ts: number): string {
 }
 
 export default function ConsultasReferenciaRfcPlacaPage(): React.ReactElement {
-  const savedResults = useQuery(api.queries.getLatestRfcInvestigationResults);
+  const savedResults = useQuery(api.datamappingQueries.getLatestRfcInvestigationResults);
   const runAction = useAction(api.actions.runRfcInvestigationAndSave);
   const [running, setRunning] = useState(false);
   const [error, setError] = useState<string | null>(null);

@@ -43,3 +43,24 @@ export interface DateRange {
   startDate: string;
   endDate: string;
 }
+
+/** Contrato unificado de stats por mes para UI espejo (CloudWatch y Datamapping). */
+export interface SourceMonthStats {
+  month: string;
+  totalRecords: number;
+  /** Solo datamapping: registros con status PAGO VALIDADO (comparables con paymentRecords). */
+  totalRecordsPagoValidado?: number;
+  /** Solo datamapping: PAGO VALIDADO con fuente DEC (declaraciones en cero). Número a comparar vs CloudWatch. */
+  totalRecordsPagoValidadoDec?: number;
+  daysWithData: number;
+  lastUpdated: number;
+}
+
+/** Detalle de un mes (byDate) para heatmap. Mismo shape para ambas fuentes. byDatePagoValidadoDec solo datamapping (por día, al recalcular). */
+export interface SourceMonthDetail {
+  totalRecords: number;
+  daysWithData: number;
+  byDate: Array<{ date: string; count: number }>;
+  /** Solo datamapping: por día cuenta PAGO VALIDADO - DEC. Si existe, la tabla diaria muestra DEC y PV−DEC por día. */
+  byDatePagoValidadoDec?: Array<{ date: string; count: number }>;
+}

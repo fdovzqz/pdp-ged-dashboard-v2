@@ -1,6 +1,6 @@
 /**
  * Regenera monthStats y dailyData para los meses con inconsistencias.
- * Ejecuta recreateMonthStatsFromPaymentRecords y buildJanuaryAggregates.
+ * Ejecuta recreateMonthStatsFromPaymentRecords y buildCloudwatchAggregates.
  *
  * Uso: npx tsx scripts/regenerate-inconsistent-months.ts
  */
@@ -66,7 +66,7 @@ async function main(): Promise<void> {
     }
   }
 
-  // 2. Regenerar dailyData (buildJanuaryAggregates) en lotes para evitar timeout
+  // 2. Regenerar dailyData (buildCloudwatchAggregates) en lotes para evitar timeout
   const BATCH_SIZE = 8;
   const batches: string[][] = [];
   for (let i = 0; i < MONTHS_WITH_ISSUES.length; i += BATCH_SIZE) {
@@ -79,7 +79,7 @@ async function main(): Promise<void> {
     console.log(`  Lote ${b + 1}/${batches.length}: ${batch.join(", ")}`);
     try {
       const result = (await client.action(
-        api.januaryETL.buildJanuaryAggregates,
+        api.aggregatesCloudwatchETL.buildCloudwatchAggregates,
         { months: batch }
       )) as { summary: Record<string, unknown>; totalRecords: number };
       console.log(`  OK - ${result.totalRecords} meses procesados\n`);

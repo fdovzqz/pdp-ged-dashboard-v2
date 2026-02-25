@@ -31,7 +31,7 @@ export const MonthYearSelector = ({
   value,
   onChange,
 }: MonthYearSelectorProps): React.ReactElement => {
-  const availableMonthsQuery = api.januaryQueriesDatamapping.getAvailableMonths;
+  const availableMonthsQuery = api.aggregatesDatamappingQueries.getAvailableMonths;
   const availableMonths = useQuery(availableMonthsQuery);
 
   const options = useMemo(() => {

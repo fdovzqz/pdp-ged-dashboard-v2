@@ -104,7 +104,7 @@ async function main(): Promise<void> {
     }));
 
     try {
-      const result = (await client.mutation(api.mutations.ingestPaymentBatch, {
+      const result = (await client.mutation(api.cloudwatchMutations.ingestPaymentBatch, {
         records: recs,
       })) as { inserted: number; skipped: number };
       totalInserted += result.inserted;

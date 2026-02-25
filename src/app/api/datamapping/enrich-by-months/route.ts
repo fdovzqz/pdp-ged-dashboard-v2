@@ -2,7 +2,6 @@ import { NextResponse } from "next/server";
 import { ConvexHttpClient } from "convex/browser";
 import { api } from "convex/_generated/api";
 import type { Id } from "convex/_generated/dataModel";
-import { inngest } from "@/inngest/client";
 
 function getConvexUrl(): string {
   const url = process.env.NEXT_PUBLIC_CONVEX_URL;
@@ -27,29 +26,53 @@ function generateMonthRange(start: string, end: string): string[] {
   return months;
 }
 
-const ENRICHMENT_START = "2024-01";
-const ENRICHMENT_END = "2026-02";
-const ENRICHMENT_MONTHS = generateMonthRange(ENRICHMENT_START, ENRICHMENT_END);
+const DATAMAPPING_HISTORY_START = "2024-01";
+const PERIOD_END = "2026-02";
 
 /**
  * POST /api/datamapping/enrich-by-months
- * Crea un pipeline job y dispara Inngest para enriquecer datamapping por meses (RFC + placa, evoId, etc.).
- * El job corre en Inngest; la UI consulta pipelineJobs para ver avance y resultado por mes.
+ * Crea un pipeline job datamapping_enrichment_by_months y lo arranca.
+ * Body: { months?: string[] } o { start?: "YYYY-MM", end?: "YYYY-MM" }.
+ * Si no se envía body, usa todo el rango por defecto.
  */
-export async function POST(): Promise<NextResponse> {
+export async function POST(request: Request): Promise<NextResponse> {
   try {
+    const body = (await request.json().catch(() => ({}))) as {
+      months?: string[];
+      start?: string;
+      end?: string;
+    };
+
+    let months: string[];
+    if (Array.isArray(body.months) && body.months.length > 0) {
+      months = body.months;
+    } else if (
+      typeof body.start === "string" &&
+      typeof body.end === "string"
+    ) {
+      months = generateMonthRange(body.start, body.end);
+    } else {
+      months = generateMonthRange(DATAMAPPING_HISTORY_START, PERIOD_END);
+    }
+
+    if (months.length === 0) {
+      return NextResponse.json(
+        { ok: false, error: "Rango de meses inválido o vacío" },
+        { status: 400 }
+      );
+    }
+
     const client = new ConvexHttpClient(getConvexUrl());
     const jobId = (await client.mutation(
-      api.pipelineJobs.createPipelineJob,
+      api.pipelineMutations.createPipelineJob,
       {
         jobType: "datamapping_enrichment_by_months",
-        scope: { months: ENRICHMENT_MONTHS },
+        scope: { months },
       }
     )) as Id<"pipelineJobs">;
 
-    await inngest.send({
-      name: "reconciliation/datamapping.enrich-by-months",
-      data: { jobId },
+    await client.mutation(api.pipelineMutations.startPipelineJob, {
+      jobId,
     });
 
     return NextResponse.json({ ok: true, jobId });
@@ -58,7 +81,10 @@ export async function POST(): Promise<NextResponse> {
     return NextResponse.json(
       {
         ok: false,
-        error: err instanceof Error ? err.message : "Error al iniciar job de enriquecimiento",
+        error:
+          err instanceof Error
+            ? err.message
+            : "Error al iniciar enriquecimiento por meses",
       },
       { status: 500 }
     );

@@ -1,0 +1,180 @@
+{
+  "generatedAt": "2026-02-23T07:12:58.039Z",
+  "results": [
+    {
+      "referencia": "202600002323148754268",
+      "cloudwatch": {
+        "found": true,
+        "sources": [
+          "v2"
+        ],
+        "bySource": {
+          "v1": {
+            "count": 0,
+            "importDate": "",
+            "parseOk": false
+          },
+          "v2": {
+            "count": 1,
+            "importDate": "2026-02-03",
+            "parseOk": true
+          },
+          "payment": {
+            "count": 0,
+            "importDate": "",
+            "parseOk": false
+          }
+        },
+        "dedupWinner": "v2",
+        "importDateFromWinner": "2026-02-03"
+      },
+      "convex": {
+        "found": false,
+        "importMonth": null,
+        "importDate": null,
+        "logSource": null
+      },
+      "conclusion": "En CloudWatch pero NO en Convex: pérdida en ingestión (parse/ventana/orden)."
+    },
+    {
+      "referencia": "202600002968248834274",
+      "cloudwatch": {
+        "found": true,
+        "sources": [
+          "v2"
+        ],
+        "bySource": {
+          "v1": {
+            "count": 0,
+            "importDate": "",
+            "parseOk": false
+          },
+          "v2": {
+            "count": 1,
+            "importDate": "2026-02-13",
+            "parseOk": true
+          },
+          "payment": {
+            "count": 0,
+            "importDate": "",
+            "parseOk": false
+          }
+        },
+        "dedupWinner": "v2",
+        "importDateFromWinner": "2026-02-13"
+      },
+      "convex": {
+        "found": false,
+        "importMonth": null,
+        "importDate": null,
+        "logSource": null
+      },
+      "conclusion": "En CloudWatch pero NO en Convex: pérdida en ingestión (parse/ventana/orden)."
+    },
+    {
+      "referencia": "202600002823548839291",
+      "cloudwatch": {
+        "found": true,
+        "sources": [
+          "v2"
+        ],
+        "bySource": {
+          "v1": {
+            "count": 0,
+            "importDate": "",
+            "parseOk": false
+          },
+          "v2": {
+            "count": 1,
+            "importDate": "2026-02-12",
+            "parseOk": true
+          },
+          "payment": {
+            "count": 0,
+            "importDate": "",
+            "parseOk": false
+          }
+        },
+        "dedupWinner": "v2",
+        "importDateFromWinner": "2026-02-12"
+      },
+      "convex": {
+        "found": false,
+        "importMonth": null,
+        "importDate": null,
+        "logSource": null
+      },
+      "conclusion": "En CloudWatch pero NO en Convex: pérdida en ingestión (parse/ventana/orden)."
+    },
+    {
+      "referencia": "202600002547848836231",
+      "cloudwatch": {
+        "found": true,
+        "sources": [
+          "v2"
+        ],
+        "bySource": {
+          "v1": {
+            "count": 0,
+            "importDate": "",
+            "parseOk": false
+          },
+          "v2": {
+            "count": 1,
+            "importDate": "2026-02-10",
+            "parseOk": true
+          },
+          "payment": {
+            "count": 0,
+            "importDate": "",
+            "parseOk": false
+          }
+        },
+        "dedupWinner": "v2",
+        "importDateFromWinner": "2026-02-10"
+      },
+      "convex": {
+        "found": false,
+        "importMonth": null,
+        "importDate": null,
+        "logSource": null
+      },
+      "conclusion": "En CloudWatch pero NO en Convex: pérdida en ingestión (parse/ventana/orden)."
+    },
+    {
+      "referencia": "202600002531048837213",
+      "cloudwatch": {
+        "found": true,
+        "sources": [
+          "v2"
+        ],
+        "bySource": {
+          "v1": {
+            "count": 0,
+            "importDate": "",
+            "parseOk": false
+          },
+          "v2": {
+            "count": 1,
+            "importDate": "2026-02-10",
+            "parseOk": true
+          },
+          "payment": {
+            "count": 0,
+            "importDate": "",
+            "parseOk": false
+          }
+        },
+        "dedupWinner": "v2",
+        "importDateFromWinner": "2026-02-10"
+      },
+      "convex": {
+        "found": false,
+        "importMonth": null,
+        "importDate": null,
+        "logSource": null
+      },
+      "conclusion": "En CloudWatch pero NO en Convex: pérdida en ingestión (parse/ventana/orden)."
+    }
+  ]
+}

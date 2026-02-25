@@ -27,6 +27,7 @@ const nextConfig: NextConfig = {
       { source: "/jobs", destination: "/configuracion/status", permanent: true },
       { source: "/reconcile/january-2026", destination: "/reconciliacion/diferencias-fuentes", permanent: true },
       { source: "/reconcile/rfc-referencias", destination: "/reconciliacion/consultas-referencia-rfc-placa", permanent: true },
+      { source: "/v1", destination: "/operaciones", permanent: true },
     ];
   },
   ...(convexUrl && {

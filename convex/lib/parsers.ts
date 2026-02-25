@@ -34,10 +34,10 @@ function normalizeEstatus(estatus: string): string {
   return s || "PAGO VALIDADO";
 }
 
-/** Fecha/mes en hora México (UTC-6). Timestamps CloudWatch son UTC. */
+/** Fecha/mes en hora México (UTC-6). Timestamps CloudWatch son UTC. Sin fallback: si no hay fecha, devuelve "". El llamador debe asignar el mes del día que se está sincronizando. */
 function extractImportMonth(ts: string, fechaTxn: string): string {
   const date = extractImportDate(ts, fechaTxn);
-  return date ? date.substring(0, 7) : "2026-01";
+  return date ? date.substring(0, 7) : "";
 }
 
 /** Fecha YYYY-MM-DD en hora México (UTC-6). Para V1/V2 preferimos fecha transacción (dato negocio). */
@@ -55,6 +55,27 @@ function extractImportDate(ts: string, fechaTxn: string): string {
   return "";
 }
 
+/** Extracción directa: referencia o reference en el mensaje crudo. Acepta comillas normales o escapadas \". */
+function extractReferenceFromRaw(messageStr: string): { referencia: string; monto?: number; fechaTransaccion?: string } | null {
+  // Órden: escapado \" (dentro de JSON string), luego sin escapar
+  const refMatch =
+    messageStr.match(/\\"referencia\\"\s*:\s*\\"(\d{15,})\\"/) ??
+    messageStr.match(/\\"reference\\"\s*:\s*\\"(\d{15,})\\"/) ??
+    messageStr.match(/"referencia"\s*:\s*"(\d{15,})"/) ??
+    messageStr.match(/"reference"\s*:\s*"(\d{15,})"/);
+  if (!refMatch?.[1]) return null;
+  const referencia = refMatch[1].trim();
+  const montoMatch = messageStr.match(/"importeTxn"\s*:\s*(\d+)/) ?? messageStr.match(/importeTxn["\s]*:["\s]*(\d+)/);
+  const fechaMatch =
+    messageStr.match(/"fechaTransaccion"\s*:\s*"([^"]+)"/) ??
+    messageStr.match(/\\"fechaTransaccion\\"\s*:\s*\\"([^"]+)\\"/);
+  return {
+    referencia,
+    monto: montoMatch?.[1] ? Number(montoMatch[1]) : undefined,
+    fechaTransaccion: fechaMatch?.[1]?.trim(),
+  };
+}
+
 export function parseV1V2(
   rows: RawRow[],
   source: "v1" | "v2"
@@ -68,13 +89,38 @@ export function parseV1V2(
       const messageStr = row["@message"];
       if (!messageStr) continue;
 
-      const message = JSON.parse(messageStr) as Record<string, unknown>;
-      const details = message?.details as Record<string, unknown> | undefined;
-      if (!details) continue;
+      // Primero: extracción directa del mensaje crudo (referencia o reference). Si está, usarla y listo.
+      const direct = extractReferenceFromRaw(messageStr);
+      if (direct?.referencia) {
+        if (seen.has(direct.referencia)) continue;
+        seen.add(direct.referencia);
+        results.push({
+          referencia: direct.referencia,
+          monto: direct.monto ?? 0,
+          timestamp,
+          fechaTransaccion: direct.fechaTransaccion ?? "",
+          logSource: source,
+          movimiento: "",
+          estatus: "PAGO VALIDADO",
+          importMonth: extractImportMonth(timestamp, direct.fechaTransaccion ?? ""),
+          importDate: extractImportDate(timestamp, direct.fechaTransaccion ?? ""),
+        });
+        continue;
+      }
+
+      let message: Record<string, unknown> | undefined;
+      let details: Record<string, unknown> | undefined;
+      try {
+        message = JSON.parse(messageStr) as Record<string, unknown>;
+        details = message?.details as Record<string, unknown> | undefined;
+      } catch {
+        details = undefined;
+      }
 
       let items: Record<string, unknown>[] = [];
 
-      const inputStr = details.input;
+      if (details) {
+        const inputStr = details.input;
       if (typeof inputStr === "string" && inputStr !== "null") {
         const input = JSON.parse(inputStr) as Record<string, unknown>;
         const transacciones = input?.transacciones;
@@ -97,8 +143,8 @@ export function parseV1V2(
             (output?.transacciones as Record<string, unknown>[] | undefined);
           if (Array.isArray(transacciones)) {
             items = transacciones as Record<string, unknown>[];
-          } else if (output?.referencia || data?.referencia || payload?.referencia) {
-            const obj = (output?.referencia ? output : data?.referencia ? data : payload) as Record<string, unknown>;
+          } else if (output?.referencia || data?.referencia || payload?.referencia || (data as Record<string, unknown>)?.reference) {
+            const obj = (output?.referencia ? output : data?.referencia ? data : (data as Record<string, unknown>)?.reference ? data : payload) as Record<string, unknown>;
             items = [obj];
           } else {
             const found = findTransactionInOutput(output);
@@ -135,9 +181,33 @@ export function parseV1V2(
         const payload = params?.Payload;
         if (payload?.referencia) items = [payload];
       }
+      }
+
+      // Fallback V2/SPEI: extraer referencia del mensaje crudo (cuando no hay details, parse falló, o input/output no dieron items)
+      if (items.length === 0 && messageStr) {
+        const refMatch =
+          messageStr.match(/"referencia"\s*:\s*"(\d{15,})"/) ??
+          messageStr.match(/"reference"\s*:\s*"(\d{15,})"/) ??
+          messageStr.match(/\\"referencia\\"\s*:\s*\\"(\d{15,})\\"/) ??
+          messageStr.match(/\\"reference\\"\s*:\s*\\"(\d{15,})\\"/);
+        if (refMatch?.[1]) {
+          const referencia = refMatch[1].trim();
+          const montoMatch = messageStr.match(/"importeTxn"\s*:\s*"?(\d+)"?/);
+          const fechaMatch =
+            messageStr.match(/"fechaTransaccion"\s*:\s*"([^"]+)"/) ??
+            messageStr.match(/\\"fechaTransaccion\\"\s*:\s*\\"([^"]+)\\"/);
+          items = [
+            {
+              referencia,
+              importeTxn: montoMatch?.[1] ? Number(montoMatch[1]) : undefined,
+              fechaTransaccion: fechaMatch?.[1]?.trim() ?? undefined,
+            },
+          ];
+        }
+      }
 
       for (const input of items) {
-        const referencia = String(input?.referencia ?? "").trim();
+        const referencia = String(input?.referencia ?? (input as Record<string, unknown>)?.reference ?? "").trim();
         if (!referencia || seen.has(referencia)) continue;
         seen.add(referencia);
 
@@ -168,21 +238,30 @@ export function parseV1V2(
   return results;
 }
 
-/** Busca recursivamente objetos con referencia en output (TaskStateExited). */
+/** Busca recursivamente objetos con referencia en output (TaskStateExited). Incluye "reference" (EN) y seiResponse. */
 function findTransactionInOutput(obj: unknown): Record<string, unknown>[] {
   if (!obj || typeof obj !== "object") return [];
   const rec = obj as Record<string, unknown>;
-  if (rec.referencia && typeof rec.referencia === "string") return [rec];
+  const refVal = rec.referencia ?? rec.reference;
+  if (refVal && typeof refVal === "string") return [rec];
   const data = rec.data ?? rec.payload ?? rec.Payload;
   if (data && typeof data === "object") {
     const d = data as Record<string, unknown>;
     if (Array.isArray(d.transacciones)) return d.transacciones as Record<string, unknown>[];
-    if (d.referencia) return [d];
+    if (d.referencia || d.reference) return [d];
+  }
+  // V2/SPEI: output.seiResponse[] con referencia, fechaTransaccion, importeTxn
+  const seiResponse = rec.seiResponse;
+  if (Array.isArray(seiResponse) && seiResponse.length > 0) {
+    const first = seiResponse[0];
+    if (first && typeof first === "object" && ((first as Record<string, unknown>).referencia ?? (first as Record<string, unknown>).reference)) {
+      return seiResponse as Record<string, unknown>[];
+    }
   }
   for (const v of Object.values(rec)) {
     if (Array.isArray(v)) {
       const first = v[0];
-      if (first && typeof first === "object" && (first as Record<string, unknown>).referencia) {
+      if (first && typeof first === "object" && ((first as Record<string, unknown>).referencia ?? (first as Record<string, unknown>).reference)) {
         return v as Record<string, unknown>[];
       }
     }

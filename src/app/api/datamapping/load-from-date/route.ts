@@ -2,7 +2,6 @@ import { NextResponse } from "next/server";
 import { ConvexHttpClient } from "convex/browser";
 import { api } from "convex/_generated/api";
 import type { Id } from "convex/_generated/dataModel";
-import { inngest } from "@/inngest/client";
 
 function getConvexUrl(): string {
   const url = process.env.NEXT_PUBLIC_CONVEX_URL;
@@ -21,7 +20,7 @@ function isValidDate(s: string): boolean {
 /**
  * POST /api/datamapping/load-from-date
  * Body: { sinceDate: "YYYY-MM-DD" }
- * Crea un pipeline job y dispara Inngest para cargar datamapping desde esa fecha.
+ * Crea un pipeline job y arranca el motor en Convex para cargar datamapping desde esa fecha.
  */
 export async function POST(request: Request): Promise<NextResponse> {
   try {
@@ -43,17 +42,14 @@ export async function POST(request: Request): Promise<NextResponse> {
 
     const client = new ConvexHttpClient(getConvexUrl());
     const jobId = (await client.mutation(
-      api.pipelineJobs.createPipelineJob,
+      api.pipelineMutations.createPipelineJob,
       {
         jobType: "datamapping_load_from_date",
         scope: { sinceDate: trimmed },
       }
     )) as Id<"pipelineJobs">;
 
-    await inngest.send({
-      name: "reconciliation/datamapping.load-from-date",
-      data: { jobId, sinceDate: trimmed },
-    });
+    await client.mutation(api.pipelineMutations.startPipelineJob, { jobId });
 
     return NextResponse.json({ ok: true, jobId });
   } catch (err) {

@@ -2,11 +2,11 @@
 
 import { useState, useCallback } from "react";
 import Link from "next/link";
-import { useAction } from "convex/react";
+import { useAction, useQuery } from "convex/react";
 import { api } from "convex/_generated/api";
 import { Button } from "@/components/ui/button";
 import { Progress } from "@/components/ui/progress";
-import { Loader2, Database, RefreshCw } from "lucide-react";
+import { Loader2, Database, RefreshCw, Info } from "lucide-react";
 import {
   PERIOD_START,
   PERIOD_END,
@@ -37,10 +37,22 @@ export default function EnriquecimientoAgregacionesPage(): React.ReactElement {
   > | null>(null);
   const [dmAggregatesError, setDmAggregatesError] = useState<string | null>(null);
 
-  const buildAggregates = useAction(api.januaryETL.buildJanuaryAggregates);
+  const buildAggregates = useAction(api.aggregatesCloudwatchETL.buildCloudwatchAggregates);
   const buildDatamappingAggregates = useAction(
     api.datamappingETL.buildDatamappingAggregates
   );
+
+  /** Query rápida (1 lectura por mes): qué meses tienen registros sin enriquecer. */
+  const pendingByMonth = useQuery(
+    api.datamappingQueries.getPendingEnrichmentByMonths,
+    { months: ALL_MONTHS }
+  );
+  const monthsWithPending =
+    pendingByMonth == null
+      ? null
+      : Object.entries(pendingByMonth)
+          .filter(([, has]) => has)
+          .map(([m]) => m);
 
   const toggleMonth = useCallback((month: string): void => {
     setSelectedMonths((prev) => {
@@ -99,7 +111,7 @@ export default function EnriquecimientoAgregacionesPage(): React.ReactElement {
 
   return (
     <div className="p-6 md:p-8" suppressHydrationWarning>
-      <div className="max-w-2xl mx-auto space-y-8">
+      <div className="max-w-6xl mx-auto space-y-8">
         <div>
           <h1 className="text-3xl font-bold tracking-tight font-space-grotesk gradient-text-emerald">
             Enriquecimiento y agregaciones
@@ -127,6 +139,34 @@ export default function EnriquecimientoAgregacionesPage(): React.ReactElement {
             </Link>
             .
           </p>
+          {pendingByMonth !== undefined && (
+            <div className="mt-3 flex items-start gap-2 rounded-lg bg-slate-800/50 border border-slate-700/50 p-3 text-sm">
+              <Info className="size-4 text-sky-400 shrink-0 mt-0.5" />
+              <div>
+                {monthsWithPending == null ? (
+                  <span className="text-slate-400">Comprobando...</span>
+                ) : monthsWithPending.length === 0 ? (
+                  <span className="text-emerald-400">
+                    Ningún mes del periodo tiene registros pendientes de enriquecer (todos tienen enrichmentExtracted).
+                  </span>
+                ) : (
+                  <>
+                    <span className="text-amber-400">
+                      Meses con registros pendientes de enriquecer:{" "}
+                      {monthsWithPending.join(", ")}
+                    </span>
+                    <p className="text-slate-500 text-xs mt-1">
+                      Puedes lanzar el job &quot;Enriquecer datamapping por meses&quot; desde{" "}
+                      <Link href="/configuracion/carga-fuentes" className="text-sky-400 hover:underline">
+                        Carga de fuentes
+                      </Link>
+                      . El job solo procesa registros con enrichmentExtracted = false.
+                    </p>
+                  </>
+                )}
+              </div>
+            </div>
+          )}
         </div>
 
         {/* Agregados DataMapping */}

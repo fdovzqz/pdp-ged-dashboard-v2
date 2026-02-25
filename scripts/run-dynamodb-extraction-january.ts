@@ -171,7 +171,7 @@ async function main(): Promise<void> {
     batch.push(mapItem(item));
     if (batch.length >= BATCH_SIZE) {
       const res = (await convex.mutation(
-        api.mutations.upsertDatamappingBatch,
+        api.datamappingMutations.upsertDatamappingBatch,
         { records: batch }
       )) as { inserted: number; updated: number };
       totalIngested += res.inserted + res.updated;
@@ -192,7 +192,7 @@ async function main(): Promise<void> {
   }
   if (batch.length > 0) {
     const res = (await convex.mutation(
-      api.mutations.upsertDatamappingBatch,
+      api.datamappingMutations.upsertDatamappingBatch,
       { records: batch }
     )) as { inserted: number; updated: number };
     totalIngested += res.inserted + res.updated;

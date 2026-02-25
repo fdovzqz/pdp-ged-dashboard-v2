@@ -62,7 +62,7 @@ async function main(): Promise<void> {
 
   const client = new ConvexHttpClient(convexUrl);
 
-  const allStatus = (await client.query(api.queries.getAllMonthsStatus, {})) as Array<{
+  const allStatus = (await client.query(api.cloudwatchQueries.getAllMonthsStatus, {})) as Array<{
     month: string;
     totalRecords: number;
     daysWithData: number;

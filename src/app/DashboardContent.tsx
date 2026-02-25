@@ -71,88 +71,88 @@ export function DashboardContent(): React.ReactElement {
     []
   );
 
-  const januaryApi = api.januaryQueriesDatamapping;
+  const aggregatesDatamappingApi = api.aggregatesDatamappingQueries;
 
   const monthLabel = getMonthLabel(selectedYear, selectedMonth);
   const yearKey = String(selectedYear);
 
   /* ──────── Queries ──────── */
-  const historicalData = useQuery(januaryApi.getHistoricalData, {
+  const historicalData = useQuery(aggregatesDatamappingApi.getHistoricalData, {
     month: selectedMonth,
   });
   const lastAvailableDay =
-    useQuery(januaryApi.getLastAvailableDay, { month: selectedMonth }) ?? 0;
-  const totals = useQuery(januaryApi.getTotals, { month: selectedMonth }) ?? {
+    useQuery(aggregatesDatamappingApi.getLastAvailableDay, { month: selectedMonth }) ?? 0;
+  const totals = useQuery(aggregatesDatamappingApi.getTotals, { month: selectedMonth }) ?? {
     [yearKey]: 0,
   };
   const totalsUpToDay =
-    useQuery(januaryApi.getTotalsUpToDay, {
+    useQuery(aggregatesDatamappingApi.getTotalsUpToDay, {
       maxDay: lastAvailableDay,
       month: selectedMonth,
     }) ?? totals;
   const totalsAndAmountsUpToDay = useQuery(
-    januaryApi.getTotalsAndAmountsUpToDay,
+    aggregatesDatamappingApi.getTotalsAndAmountsUpToDay,
     { maxDay: lastAvailableDay, month: selectedMonth }
   );
   const dailyAverages =
-    useQuery(januaryApi.getDailyAverages, { month: selectedMonth }) ?? {
+    useQuery(aggregatesDatamappingApi.getDailyAverages, { month: selectedMonth }) ?? {
       [yearKey]: 0,
     };
   const historicalMax =
-    useQuery(januaryApi.getHistoricalMax, { month: selectedMonth }) ?? {
+    useQuery(aggregatesDatamappingApi.getHistoricalMax, { month: selectedMonth }) ?? {
       value: 0,
       day: 0,
       year: 0,
     };
-  const hourlyDistWeekday = useQuery(januaryApi.getHourlyDistribution, {
+  const hourlyDistWeekday = useQuery(aggregatesDatamappingApi.getHourlyDistribution, {
     month: selectedMonth,
     dayType: "weekday",
   });
-  const hourlyDistWeekend = useQuery(januaryApi.getHourlyDistribution, {
+  const hourlyDistWeekend = useQuery(aggregatesDatamappingApi.getHourlyDistribution, {
     month: selectedMonth,
     dayType: "weekend",
   });
-  const heatmapData = useQuery(januaryApi.getHeatmapAmountData, {
+  const heatmapData = useQuery(aggregatesDatamappingApi.getHeatmapAmountData, {
     year: selectedYear,
     month: selectedMonth,
   });
   const weekdayWeekend =
-    useQuery(januaryApi.getWeekdayWeekendStats, { month: selectedMonth }) ?? [];
+    useQuery(aggregatesDatamappingApi.getWeekdayWeekendStats, { month: selectedMonth }) ?? [];
   const weekdayWeekendAmounts =
-    useQuery(januaryApi.getWeekdayWeekendStatsWithAmounts, {
+    useQuery(aggregatesDatamappingApi.getWeekdayWeekendStatsWithAmounts, {
       month: selectedMonth,
     }) ?? [];
   const periodStats =
-    useQuery(januaryApi.getPeriodStats, { month: selectedMonth }) ?? [];
-  const analysisNotes = useQuery(januaryApi.getAnalysisNotes) ?? [];
-  const amountTotals = useQuery(januaryApi.getAmountTotals, {
+    useQuery(aggregatesDatamappingApi.getPeriodStats, { month: selectedMonth }) ?? [];
+  const analysisNotes = useQuery(aggregatesDatamappingApi.getAnalysisNotes) ?? [];
+  const amountTotals = useQuery(aggregatesDatamappingApi.getAmountTotals, {
     month: selectedMonth,
   });
   const amountByMovement =
-    useQuery(januaryApi.getAmountByMovement, {
+    useQuery(aggregatesDatamappingApi.getAmountByMovement, {
       year: selectedYear,
       month: selectedMonth,
     }) ?? [];
-  const paymentChannels = useQuery(januaryApi.getPaymentChannelStats, {
+  const paymentChannels = useQuery(aggregatesDatamappingApi.getPaymentChannelStats, {
     month: selectedMonth,
     year: selectedYear,
   });
-  const growthMetrics = useQuery(januaryApi.getGrowthMetrics, {
+  const growthMetrics = useQuery(aggregatesDatamappingApi.getGrowthMetrics, {
     month: selectedMonth,
   });
-  const dailyAmountData = useQuery(januaryApi.getDailyAmountData, {
+  const dailyAmountData = useQuery(aggregatesDatamappingApi.getDailyAmountData, {
     year: selectedYear,
     month: selectedMonth,
   });
 
   const dayDetailSelected = useQuery(
-    januaryApi.getDayDetail,
+    aggregatesDatamappingApi.getDayDetail,
     selectedHeatmapDay !== null
       ? { year: selectedYear, month: selectedMonth, day: selectedHeatmapDay }
       : "skip"
   );
   const dayFinancialSelected = useQuery(
-    januaryApi.getDayFinancialDetail,
+    aggregatesDatamappingApi.getDayFinancialDetail,
     selectedHeatmapDay !== null
       ? { year: selectedYear, month: selectedMonth, day: selectedHeatmapDay }
       : "skip"

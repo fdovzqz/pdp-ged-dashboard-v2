@@ -2,12 +2,13 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { CopyCheck, GitCompare, Search, FileSearch } from "lucide-react";
+import { CopyCheck, GitCompare, Search, FileSearch, FileBarChart } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 const RECONCILIACION_NAV_ITEMS = [
   { href: "/reconciliacion/chequeo-duplicados", label: "Chequeo de duplicados", icon: CopyCheck },
   { href: "/reconciliacion/diferencias-fuentes", label: "Diferencias entre fuentes", icon: GitCompare },
+  { href: "/reconciliacion/desglose-periodo", label: "Desglose por periodo", icon: FileBarChart },
   { href: "/reconciliacion/consultas-referencia", label: "Consultas Referencia", icon: Search },
   {
     href: "/reconciliacion/consultas-referencia-rfc-placa",
@@ -26,7 +27,7 @@ export default function ReconciliacionLayout({
   return (
     <div className="min-h-screen bg-background">
       <div className="border-b border-slate-700/50 bg-slate-900/30 backdrop-blur-sm">
-        <div className="max-w-4xl mx-auto px-6 py-3">
+        <div className="max-w-6xl mx-auto px-4 py-3">
           <nav className="flex flex-wrap items-center gap-2">
             {RECONCILIACION_NAV_ITEMS.map((item) => {
               const active = pathname === item.href;
@@ -50,7 +51,7 @@ export default function ReconciliacionLayout({
           </nav>
         </div>
       </div>
-      {children}
+      <main className="max-w-6xl mx-auto px-4 py-6">{children}</main>
     </div>
   );
 }

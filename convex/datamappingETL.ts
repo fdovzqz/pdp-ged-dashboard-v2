@@ -77,7 +77,7 @@ export const buildDatamappingAggregates = action({
 
       while (true) {
         const result = (await ctx.runQuery(
-          api.queries.getDatamappingRecordsByMonthPaginated,
+          api.datamappingQueries.getDatamappingRecordsByMonthPaginated,
           {
             month: monthStr,
             paginationOpts: { numItems: PAGE_SIZE, cursor },
