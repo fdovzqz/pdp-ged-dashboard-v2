@@ -330,3 +330,125 @@ export const getAnnualPaymentBySource = query({
     return { byYear, totals };
   },
 });
+
+/** Fila mensual del reporte EVO (motor de pagos Banamex). */
+type EvoMonthRow = {
+  month: number;
+  evoCount: number;
+  evoMonto: number;
+  totalCount: number;
+  totalMonto: number;
+  pctCount: number;
+  pctMonto: number;
+  ticketPromedio: number;
+  daysWithData: number;
+  lastDay: number;
+};
+
+/**
+ * Recaudación EVO (motor Banamex) por mes de un año, desde datamappingDailyFuenteBreakdown
+ * (registros PAGO VALIDADO, mes por fechaTransaccion en hora México). Para la página /evo-2026.
+ */
+export const getEvoMonthlyByYear = query({
+  args: { year: v.optional(v.number()) },
+  handler: async (
+    ctx,
+    { year: yearArg }
+  ): Promise<{
+    year: number;
+    months: EvoMonthRow[];
+    totals: {
+      evoCount: number;
+      evoMonto: number;
+      totalCount: number;
+      totalMonto: number;
+      pctCount: number;
+      pctMonto: number;
+      ticketPromedio: number;
+    };
+    lastDataDate: string | null;
+  }> => {
+    const year = yearArg ?? 2026;
+    const rows = await ctx.db
+      .query("datamappingDailyFuenteBreakdown")
+      .withIndex("by_year_month_day", (q) => q.eq("year", year))
+      .collect();
+
+    const byMonth = new Map<
+      number,
+      { evoCount: number; evoMonto: number; totalCount: number; totalMonto: number; days: Set<number> }
+    >();
+    for (const r of rows) {
+      let cur = byMonth.get(r.month);
+      if (!cur) {
+        cur = { evoCount: 0, evoMonto: 0, totalCount: 0, totalMonto: 0, days: new Set() };
+        byMonth.set(r.month, cur);
+      }
+      cur.totalCount += r.count;
+      cur.totalMonto += r.monto;
+      cur.days.add(r.day);
+      if (r.fuente === "EVO") {
+        cur.evoCount += r.count;
+        cur.evoMonto += r.monto;
+      }
+    }
+
+    const months: EvoMonthRow[] = [];
+    for (let m = 1; m <= 12; m++) {
+      const cur = byMonth.get(m);
+      if (!cur) {
+        months.push({
+          month: m,
+          evoCount: 0,
+          evoMonto: 0,
+          totalCount: 0,
+          totalMonto: 0,
+          pctCount: 0,
+          pctMonto: 0,
+          ticketPromedio: 0,
+          daysWithData: 0,
+          lastDay: 0,
+        });
+        continue;
+      }
+      months.push({
+        month: m,
+        evoCount: cur.evoCount,
+        evoMonto: cur.evoMonto,
+        totalCount: cur.totalCount,
+        totalMonto: cur.totalMonto,
+        pctCount: cur.totalCount > 0 ? (cur.evoCount / cur.totalCount) * 100 : 0,
+        pctMonto: cur.totalMonto > 0 ? (cur.evoMonto / cur.totalMonto) * 100 : 0,
+        ticketPromedio: cur.evoCount > 0 ? Math.round(cur.evoMonto / cur.evoCount) : 0,
+        daysWithData: cur.days.size,
+        lastDay: Math.max(...cur.days),
+      });
+    }
+
+    const evoCount = months.reduce((s, r) => s + r.evoCount, 0);
+    const evoMonto = months.reduce((s, r) => s + r.evoMonto, 0);
+    const totalCount = months.reduce((s, r) => s + r.totalCount, 0);
+    const totalMonto = months.reduce((s, r) => s + r.totalMonto, 0);
+
+    const lastMonthWithData = [...months].reverse().find((r) => r.daysWithData > 0);
+    const pad = (n: number) => String(n).padStart(2, "0");
+    const lastDataDate = lastMonthWithData
+      ? `${year}-${pad(lastMonthWithData.month)}-${pad(lastMonthWithData.lastDay)}`
+      : null;
+
+    return {
+      year,
+      months,
+      totals: {
+        evoCount,
+        evoMonto,
+        totalCount,
+        totalMonto,
+        pctCount: totalCount > 0 ? (evoCount / totalCount) * 100 : 0,
+        pctMonto: totalMonto > 0 ? (evoMonto / totalMonto) * 100 : 0,
+        ticketPromedio: evoCount > 0 ? Math.round(evoMonto / evoCount) : 0,
+      },
+      lastDataDate,
+    };
+  },
+});

@@ -3,12 +3,13 @@
 import Image from "next/image";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { CalendarDays, BarChart3, GitCompare, Settings, LayoutDashboard } from "lucide-react";
+import { CalendarDays, BarChart3, CreditCard, GitCompare, Settings, LayoutDashboard } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 const NAV_ITEMS = [
   { href: "/", label: "Análisis Mensual", icon: CalendarDays },
   { href: "/anual", label: "Análisis Anual", icon: BarChart3 },
+  { href: "/evo-2026", label: "EVO 2026", icon: CreditCard },
   { href: "/configuracion", label: "Configuración", icon: Settings },
   { href: "/operaciones", label: "Operaciones", icon: LayoutDashboard },
   { href: "/reconciliacion", label: "Reconciliación", icon: GitCompare },
