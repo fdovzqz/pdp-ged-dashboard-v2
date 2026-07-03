@@ -73,3 +73,16 @@ Los tableros por fuente (`datamappingDailyFuenteBreakdown`, canal EVO/DEC) solo 
 - La tabla DynamoDB viva es `sam-service-data-DataMappingTable-M7WYQ7TWG6I0` (configurada en Convex env; solo lectura).
 - En enero hubo duplicados masivos por los problemas de procesamiento: siempre validar contra CloudWatch (notificaciones de pago) que es la fuente confiable de fechas y del conteo real.
 - Para reportes ejecutivos existe la app independiente `evo-pagob-report` (analisis-evo.durango.vantik.lat) que lee estos agregados vía la API pública de Convex.
+
+## Actualización automática nocturna (configurada 2026-07-03)
+
+Ya **no es necesario correr el runbook a mano** en operación normal. Un cron nativo de Convex (`convex/crons.ts`, job `actualizacion-nocturna-datos`) corre todos los días a las **02:30 hora de México** (08:30 UTC) y ejecuta la cadena completa en `convex/nightlyUpdate.ts`:
+
+1. Sync CloudWatch + sync DataMapping de los últimos 3 días (upserts idempotentes; re-sincronizar días ya cargados es seguro).
+2. Al completarse ambos → backfill de fechaTransaccion del mismo rango.
+3. Al completarse → `buildDatamappingAggregates` de los meses tocados + `recreateDatamappingMonthStatsByFechaTransaccion`.
+
+La orquestación es una máquina de estados con `ctx.scheduler` que verifica cada 2 min el estado de los jobs (`externalId` con prefijo `nightly-`); si un job falla o tarda más de ~4 h, la corrida se abandona y queda registrada en los logs de Convex (`[nightly] ...`) y en `pipelineJobs` (visibles en la página Operaciones → Runs).
+
+- **Ejecutar manualmente** (mismo efecto que el cron): `npx convex run nightlyUpdate:start` con `CONVEX_DEPLOY_KEY` de producción, o desde el dashboard de Convex → Functions.
+- **El runbook manual de arriba sigue aplicando** para backfills históricos o rangos grandes (más de ~1 semana).
